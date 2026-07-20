@@ -16,11 +16,11 @@
 				android:id="@+id/messageSender"
 				android:layout_width="wrap_content"
 				android:layout_height="wrap_content"
-				android:text="Sender"
+				android:textIsSelectable="true"
 				android:textAppearance="@style/TextAppearance.AppCompat.Body2"/>
 
 		<Space
-				android:layout_width="wrap_content"
+				android:layout_width="0dp"
 				android:layout_height="wrap_content"
 				android:layout_weight="1"/>
 
@@ -28,7 +28,7 @@
 				android:id="@+id/messageTimestamp"
 				android:layout_width="wrap_content"
 				android:layout_height="wrap_content"
-				android:text="Timestamp"
+				android:textIsSelectable="true"
 				android:textAppearance="@style/TextAppearance.AppCompat.Body2"/>
 	</LinearLayout>
 
@@ -36,6 +36,6 @@
 			android:id="@+id/messageContent"
 			android:layout_width="wrap_content"
 			android:layout_height="wrap_content"
-			android:text="Message Content"/>
+			android:textIsSelectable="true"/>
 
 </LinearLayout>

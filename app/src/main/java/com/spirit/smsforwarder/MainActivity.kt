@@ -23,10 +23,10 @@ class MainActivity : AppCompatActivity() {
 
 	private lateinit var binding: ActivityMainBinding
 	private val PERMISSIONS_REQUEST_CODE = 1
+	private var batteryOptimizationPromptShown = false
 
 	private val permissions = mutableListOf<String>().apply {
 		add(android.Manifest.permission.RECEIVE_SMS)
-		add(android.Manifest.permission.READ_SMS)
 		// Add permissions conditionally based on API levels
 		if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
 			add(android.Manifest.permission.POST_NOTIFICATIONS)
@@ -46,8 +46,6 @@ class MainActivity : AppCompatActivity() {
 			Toast.makeText(this,
 				"Please enable notification access for this app. It must be done manually.",
 				Toast.LENGTH_LONG).show()
-		} else {
-			requestBatteryOptimizationIfRequired()
 		}
 
 		requestPermissions()
@@ -65,6 +63,13 @@ class MainActivity : AppCompatActivity() {
 
 		// Start background service
 		androidx.core.content.ContextCompat.startForegroundService(this, Intent(this, AllNotificationService::class.java))
+	}
+
+	override fun onResume() {
+		super.onResume()
+		if (isNotificationServiceEnabled() && !batteryOptimizationPromptShown) {
+			requestBatteryOptimizationIfRequired()
+		}
 	}
 
 	private fun requestPermissions() {
@@ -120,8 +125,8 @@ class MainActivity : AppCompatActivity() {
 			if (permissionsToRequest.isNotEmpty()) {
 				val missingList = permissionsToRequest.joinToString("\n") { "- " + it.substringAfterLast('.') }
 				AlertDialog.Builder(this)
-					.setTitle("Permissions Required")
-					.setMessage("These permissions were permanently denied:\n$missingList\n\nPlease go to App Settings and manually enable them so the app can function correctly.")
+					.setTitle("Permissions Not Granted")
+					.setMessage("The following permissions are still disabled:\n$missingList\n\nYou can enable them from App Settings.")
 					.setPositiveButton("Open Settings") { _, _ ->
 						val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
 							data = android.net.Uri.fromParts("package", packageName, null)
@@ -147,22 +152,18 @@ class MainActivity : AppCompatActivity() {
 	}
 
 	private fun requestBatteryOptimizationIfRequired() {
-		if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-			val pm = getSystemService(android.content.Context.POWER_SERVICE) as android.os.PowerManager
-			if (!pm.isIgnoringBatteryOptimizations(packageName)) {
-				AlertDialog.Builder(this)
-					.setTitle("Battery Optimization")
-					.setMessage("To ensure the app intercepts all notifications and stays alive in the background, please disable battery optimization when prompted.")
-					.setPositiveButton("OK") { _, _ ->
-						val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-							data = android.net.Uri.parse("package:$packageName")
-						}
-						startActivity(intent)
-					}
-					.setNegativeButton("Cancel", null)
-					.create()
-					.show()
-			}
+		val powerManager = getSystemService(android.content.Context.POWER_SERVICE) as android.os.PowerManager
+		batteryOptimizationPromptShown = true
+		if (!powerManager.isIgnoringBatteryOptimizations(packageName)) {
+			AlertDialog.Builder(this)
+				.setTitle("Battery Optimization")
+				.setMessage("To improve background reliability, open battery optimization settings and allow this app to run without optimization.")
+				.setPositiveButton("Open Settings") { _, _ ->
+					startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+				}
+				.setNegativeButton("Cancel", null)
+				.create()
+				.show()
 		}
 	}
 }

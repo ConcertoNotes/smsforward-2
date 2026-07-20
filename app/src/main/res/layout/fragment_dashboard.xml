@@ -17,7 +17,6 @@
 			app:layout_wrapBehaviorInParent="included"
 			android:layout_margin="4dp"
 			android:paddingBottom="10dp"
-			android:id="@+id/notifScrollView"
 			app:layout_constraintTop_toTopOf="parent">
 
 		<LinearLayout

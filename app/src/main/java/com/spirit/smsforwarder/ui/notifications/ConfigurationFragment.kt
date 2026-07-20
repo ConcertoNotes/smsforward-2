@@ -1,6 +1,5 @@
 package com.spirit.smsforwarder.ui.notifications
 
-import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
 import android.os.Bundle
 import android.text.Editable
@@ -11,6 +10,7 @@ import android.view.ViewGroup
 import android.widget.*
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.lifecycleScope
 import com.spirit.smsforwarder.R
 import com.spirit.smsforwarder.databinding.FragmentConfigurationBinding
 import kotlinx.coroutines.*
@@ -20,10 +20,11 @@ class ConfigurationFragment : Fragment() {
 	private var _binding: FragmentConfigurationBinding? = null
 	private val binding get() = _binding!!
 	private lateinit var configurationViewModel: ConfigurationViewModel
-	private val coroutineScope = CoroutineScope(Dispatchers.Main + Job())
 	private var installedApps: List<AppItem> = emptyList()
 	private var filteredApps: List<AppItem> = emptyList()
 	private lateinit var appAdapter: AppListAdapter
+	private var filterJob: Job? = null
+	private var currentQuery = ""
 
 	override fun onCreateView(
 		inflater: LayoutInflater,
@@ -39,9 +40,14 @@ class ConfigurationFragment : Fragment() {
 		binding.appListContainer.layoutManager = androidx.recyclerview.widget.LinearLayoutManager(requireContext())
 		binding.appListContainer.adapter = appAdapter
 
-		observeViewModel()
-		loadApps()
 		return binding.root
+	}
+
+	override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
+		super.onViewCreated(view, savedInstanceState)
+		observeViewModel()
+		setupSearchAndSort()
+		loadApps()
 	}
 
 	private fun setupSearchAndSort() {
@@ -51,17 +57,19 @@ class ConfigurationFragment : Fragment() {
 		}
 		binding.sortSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
 			override fun onItemSelected(parent: AdapterView<*>, view: View?, position: Int, id: Long) {
-				sortAppListAsync()
+				filterAndSortApps()
 			}
 			override fun onNothingSelected(parent: AdapterView<*>) {}
 		}
 		binding.searchView.setOnQueryTextListener(object : SearchView.OnQueryTextListener {
 			override fun onQueryTextSubmit(query: String?): Boolean {
-				filterAppListAsync(query)
+				currentQuery = query.orEmpty()
+				filterAndSortApps()
 				return true
 			}
 			override fun onQueryTextChange(newText: String?): Boolean {
-				filterAppListAsync(newText)
+				currentQuery = newText.orEmpty()
+				filterAndSortApps()
 				return true
 			}
 		})
@@ -80,7 +88,7 @@ class ConfigurationFragment : Fragment() {
 
 	private fun loadApps() {
 		showLoading(true)
-		coroutineScope.launch {
+		viewLifecycleOwner.lifecycleScope.launch {
 			val pm = requireContext().packageManager
 			val newInstalledApps = withContext(Dispatchers.IO) {
 				pm.getInstalledPackages(PackageManager.GET_META_DATA).mapNotNull { packageInfo ->
@@ -97,12 +105,7 @@ class ConfigurationFragment : Fragment() {
 				}
 			}
 			installedApps = newInstalledApps
-			filteredApps = installedApps
-			withContext(Dispatchers.Main) {
-				populateAppList(filteredApps)
-				showLoading(false)
-				setupSearchAndSort()
-			}
+			filterAndSortApps()
 		}
 	}
 
@@ -114,38 +117,33 @@ class ConfigurationFragment : Fragment() {
 		binding.loadingIndicator.visibility = if (isLoading) View.VISIBLE else View.GONE
 	}
 
-	private fun filterAppListAsync(query: String?) {
-		coroutineScope.launch {
+	private fun filterAndSortApps() {
+		filterJob?.cancel()
+		val query = currentQuery
+		val sortPosition = binding.sortSpinner.selectedItemPosition
+		filterJob = viewLifecycleOwner.lifecycleScope.launch {
 			showLoading(true)
-			val lowerCaseQuery = query?.lowercase() ?: ""
-			filteredApps = withContext(Dispatchers.Default) {
-				installedApps.filter { appItem ->
-					appItem.appName.lowercase().contains(lowerCaseQuery)
+			val result = withContext(Dispatchers.Default) {
+				val filtered = installedApps.filter {
+					it.appName.contains(query, ignoreCase = true) || it.packageName.contains(query, ignoreCase = true)
+				}
+				when (sortPosition) {
+					0 -> filtered.sortedWith(compareByDescending<AppItem> { it.isEnabled }.thenBy { it.appName.lowercase() })
+					1 -> filtered.sortedBy { it.appName.lowercase() }
+					2 -> filtered.sortedByDescending { it.appName.lowercase() }
+					else -> filtered
 				}
 			}
-			sortAppListAsync()
-		}
-	}
-
-	private fun sortAppListAsync() {
-		coroutineScope.launch {
-			filteredApps = withContext(Dispatchers.Default) {
-				when (binding.sortSpinner.selectedItem.toString()) {
-					getString(R.string.enabled_first_search) -> filteredApps.sortedByDescending { it.isEnabled }
-					getString(R.string.alphabetical_search) -> filteredApps.sortedBy { it.appName }
-					getString(R.string.alphabetical_reverse) -> filteredApps.sortedByDescending { it.appName }
-					else -> filteredApps
-				}
-			}
-			populateAppList(filteredApps)
+			filteredApps = result
+			populateAppList(result)
 			showLoading(false)
 		}
 	}
 
 	override fun onDestroyView() {
-		super.onDestroyView()
+		filterJob?.cancel()
 		_binding = null
-		coroutineScope.cancel()
+		super.onDestroyView()
 	}
 }
 
@@ -194,7 +192,20 @@ class AppListAdapter(
 	override fun getItemCount() = apps.size
 
 	fun updateData(newApps: List<AppItem>) {
+		val oldApps = apps
+		val diff = androidx.recyclerview.widget.DiffUtil.calculateDiff(
+			object : androidx.recyclerview.widget.DiffUtil.Callback() {
+				override fun getOldListSize() = oldApps.size
+				override fun getNewListSize() = newApps.size
+				override fun areItemsTheSame(oldItemPosition: Int, newItemPosition: Int): Boolean {
+					return oldApps[oldItemPosition].packageName == newApps[newItemPosition].packageName
+				}
+				override fun areContentsTheSame(oldItemPosition: Int, newItemPosition: Int): Boolean {
+					return oldApps[oldItemPosition] == newApps[newItemPosition]
+				}
+			}
+		)
 		apps = newApps
-		notifyDataSetChanged()
+		diff.dispatchUpdatesTo(this)
 	}
 }

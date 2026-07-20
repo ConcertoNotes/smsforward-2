@@ -1,298 +1,364 @@
 package com.spirit.smsforwarder
 
-import android.app.*
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.app.Service
+import android.content.ComponentName
 import android.content.Intent
-import android.content.IntentFilter
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
-import android.provider.Telephony
-import android.util.Log
+import android.service.notification.NotificationListenerService
 import androidx.core.app.NotificationCompat
 import com.spirit.smsforwarder.model.MessageItem
 import com.spirit.smsforwarder.model.QueueSingleton
-import java.io.BufferedReader
-import java.io.InputStreamReader
-import java.io.OutputStream
+import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
+import java.nio.charset.StandardCharsets
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.concurrent.Executors
+import kotlin.math.min
+
+internal const val TELEGRAM_CONTENT_CHUNK_SIZE = 3_500
+internal const val MAX_RETRY_DELAY_MS = 15 * 60_000L
+
+internal fun escapeTelegramHtml(value: String): String = buildString(value.length) {
+	value.forEach { character ->
+		when (character) {
+			'&' -> append("&amp;")
+			'<' -> append("&lt;")
+			'>' -> append("&gt;")
+			'\"' -> append("&quot;")
+			else -> append(character)
+		}
+	}
+}
+
+internal fun splitTelegramContent(content: String, maxChunkSize: Int = TELEGRAM_CONTENT_CHUNK_SIZE): List<String> {
+	require(maxChunkSize > 0) { "maxChunkSize must be positive" }
+	if (content.isEmpty()) return listOf("")
+
+	val chunks = mutableListOf<String>()
+	var start = 0
+	while (start < content.length) {
+		var end = min(start + maxChunkSize, content.length)
+		if (end < content.length && Character.isHighSurrogate(content[end - 1]) && Character.isLowSurrogate(content[end])) {
+			end -= 1
+		}
+		val newline = content.lastIndexOf('\n', end - 1)
+		if (newline > start + maxChunkSize / 2) end = newline + 1
+		chunks.add(content.substring(start, end))
+		start = end
+	}
+	return chunks
+}
+
+internal fun calculateRetryBackoff(retryCount: Int): Long {
+	val multiplier = 1L shl retryCount.coerceIn(0, 7)
+	return min(10_000L * multiplier, MAX_RETRY_DELAY_MS)
+}
+
+internal fun parseRetryAfterMillis(responseBody: String): Long {
+	return try {
+		val seconds = JSONObject(responseBody)
+			.optJSONObject("parameters")
+			?.optLong("retry_after", 60L)
+			?: 60L
+		seconds.coerceAtLeast(1L) * 1_000L
+	} catch (_: Exception) {
+		60_000L
+	}
+}
 
 class AllNotificationService : Service() {
+	private companion object {
+		const val SERVICE_NOTIFICATION_ID = 1
+		const val RATE_LIMIT_NOTIFICATION_ID = 2
+		const val SERVICE_CHANNEL_ID = "SMSForwarderServiceChannelV2"
+		const val RATE_LIMIT_CHANNEL_ID = "SMSForwarderRateLimitChannel"
+		const val HTTP_TOO_MANY_REQUESTS = 429
+		const val MAX_MESSAGE_AGE_MS = 14L * 24 * 60 * 60 * 1000
+		const val IDLE_POLL_INTERVAL_MS = 5_000L
+		const val BUSY_POLL_INTERVAL_MS = 500L
+		const val CONFIG_RETRY_DELAY_MS = 60_000L
+	}
 
-	private val smsReceiver = SmsReceiver()
 	private val handler = Handler(Looper.getMainLooper())
+	private val executorService = Executors.newSingleThreadExecutor()
 	@Volatile
 	private var isProcessingMessage = false
-
-	private var permanentWakeLock: android.os.PowerManager.WakeLock? = null
-	private var permanentWifiLock: android.net.wifi.WifiManager.WifiLock? = null
-
+	@Volatile
+	private var destroyed = false
 	private var lastHealthCheckTime = System.currentTimeMillis()
+
+	private sealed class SendResult {
+		object Success : SendResult()
+		data class Retry(val delayMs: Long, val responseCode: Int) : SendResult()
+		data class PermanentFailure(val responseCode: Int) : SendResult()
+	}
+
+	private data class HttpResponse(val code: Int, val body: String)
 
 	private val processRunnable = object : Runnable {
 		override fun run() {
-			val now = System.currentTimeMillis()
-
+			if (destroyed) return
 			checkNotificationServiceHealth()
+			QueueSingleton.discardPendingOlderThan(System.currentTimeMillis() - MAX_MESSAGE_AGE_MS)
 
-			if (now < QueueSingleton.pauseSendingUntil) {
-				handler.postDelayed(this, 1000)
+			val message = QueueSingleton.messageQueue.peek()
+			if (message == null) {
+				QueueSingleton.releaseWakeLock()
+				scheduleNext(IDLE_POLL_INTERVAL_MS)
 				return
 			}
 
-			val fourteenDays = 14L * 24 * 60 * 60 * 1000
-			while (true) {
-				val peekMsg = QueueSingleton.messageQueue.peek()
-				if (peekMsg != null && (now - peekMsg.timestamp) > fourteenDays) {
-					QueueSingleton.messageQueue.poll()
-				} else {
-					break
+			val waitTime = message.nextAttemptAt - System.currentTimeMillis()
+			if (waitTime > 0) {
+				scheduleNext(min(waitTime, IDLE_POLL_INTERVAL_MS))
+				return
+			}
+
+			if (isProcessingMessage) {
+				scheduleNext(BUSY_POLL_INTERVAL_MS)
+				return
+			}
+
+			isProcessingMessage = true
+			QueueSingleton.wakeUp(this@AllNotificationService)
+			executorService.execute {
+				val result = sendMessage(message)
+				handler.post {
+					handleSendResult(message, result)
+					isProcessingMessage = false
+					if (!destroyed) scheduleNext(0)
 				}
 			}
-
-			val message = QueueSingleton.messageQueue.peek()
-			if (message != null) {
-				if (!isProcessingMessage) {
-					isProcessingMessage = true
-					executorService.execute {
-						try {
-							val responseCode = sendMessage(message)
-							if (responseCode == 200) {
-								message.isSent = true
-								QueueSingleton.addToHistory(message)
-								QueueSingleton.messageQueue.poll()
-							} else {
-								message.isError = true
-								if (responseCode == 429) {
-									QueueSingleton.pauseSendingUntil = System.currentTimeMillis() + 3600_000L
-									showRateLimitNotification()
-								} else {
-									QueueSingleton.pauseSendingUntil = System.currentTimeMillis() + 10_000L
-								}
-							}
-							broadcastMessage(message)
-						} finally {
-							isProcessingMessage = false
-						}
-					}
-				}
-			}
-
-			if(QueueSingleton.notificationDismissed)
-			{
-				QueueSingleton.notificationDismissed = false
-				startForeground(1, createNotification())
-			}
-
-			handler.postDelayed(this, 1000)
 		}
 	}
-
-	private val executorService = Executors.newSingleThreadExecutor()
 
 	override fun onCreate() {
 		super.onCreate()
-
-		val powerManager = getSystemService(android.content.Context.POWER_SERVICE) as android.os.PowerManager
-		try {
-			permanentWakeLock = powerManager.newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK, "SMSForwarder::PermanentWakeLock")
-			permanentWakeLock?.setReferenceCounted(false)
-			permanentWakeLock?.acquire()
-		} catch (e: Exception) {
-			e.printStackTrace()
-		}
-
-		try {
-			val wifiManager = applicationContext.getSystemService(android.content.Context.WIFI_SERVICE) as android.net.wifi.WifiManager
-			permanentWifiLock = wifiManager.createWifiLock(android.net.wifi.WifiManager.WIFI_MODE_FULL_HIGH_PERF, "SMSForwarder::PermanentWifiLock")
-			permanentWifiLock?.setReferenceCounted(false)
-			permanentWifiLock?.acquire()
-		} catch (e: Exception) {
-			e.printStackTrace()
-		}
-
-		registerReceiver(smsReceiver, IntentFilter(Telephony.Sms.Intents.SMS_RECEIVED_ACTION))
-		startService(Intent(this, NotificationListener::class.java))
+		createNotificationChannels()
+		startForeground(SERVICE_NOTIFICATION_ID, createNotification())
+		QueueSingleton.initialize(this)
 		handler.post(processRunnable)
+	}
 
-		createNotificationChannel()
-		startForeground(1, createNotification())
+	override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+		startForeground(SERVICE_NOTIFICATION_ID, createNotification())
+		return START_STICKY
 	}
 
 	override fun onDestroy() {
-		super.onDestroy()
-		try {
-			if (permanentWakeLock?.isHeld == true) permanentWakeLock?.release()
-			if (permanentWifiLock?.isHeld == true) permanentWifiLock?.release()
-		} catch (e: Exception) {
-			e.printStackTrace()
-		}
-
-		unregisterReceiver(smsReceiver)
-		stopService(Intent(this, NotificationListener::class.java))
+		destroyed = true
 		handler.removeCallbacks(processRunnable)
-		executorService.shutdown()
+		executorService.shutdownNow()
+		QueueSingleton.releaseWakeLock()
+		super.onDestroy()
 	}
 
-	override fun onBind(intent: Intent?): IBinder? {
-		return null
+	override fun onBind(intent: Intent?): IBinder? = null
+
+	private fun handleSendResult(message: MessageItem, result: SendResult) {
+		when (result) {
+			SendResult.Success -> {
+				message.isSent = true
+				message.isError = false
+				message.retryCount = 0
+				message.nextAttemptAt = 0
+				message.nextChunkIndex = 0
+				QueueSingleton.completePending(message)
+			}
+			is SendResult.Retry -> {
+				message.isError = true
+				message.retryCount += 1
+				message.nextAttemptAt = System.currentTimeMillis() + result.delayMs
+				QueueSingleton.updatePending(message)
+				if (result.responseCode == HTTP_TOO_MANY_REQUESTS) {
+					showRateLimitNotification(result.delayMs)
+				}
+			}
+			is SendResult.PermanentFailure -> {
+				message.isSent = false
+				message.isError = true
+				message.nextAttemptAt = 0
+				QueueSingleton.completePending(message)
+			}
+		}
+		broadcastMessage(message)
 	}
 
-	private fun sendMessage(message: MessageItem): Int {
-		val sharedPreferences = getSharedPreferences("smsforwarder_prefs", MODE_PRIVATE)
-		val telegramToken = sharedPreferences.getString("telegram_token", null)
-		val telegramUserId = sharedPreferences.getString("telegram_user_id", null)
-
-		if (telegramToken.isNullOrEmpty() || telegramUserId.isNullOrEmpty() || !telegramToken.contains(':')) {
-			return -1
+	private fun sendMessage(message: MessageItem): SendResult {
+		val preferences = getSharedPreferences("smsforwarder_prefs", MODE_PRIVATE)
+		val telegramToken = preferences.getString("telegram_token", null)
+		val telegramUserId = preferences.getString("telegram_user_id", null)
+		if (telegramToken.isNullOrBlank() || telegramUserId.isNullOrBlank() || ':' !in telegramToken) {
+			return SendResult.Retry(CONFIG_RETRY_DELAY_MS, -1)
 		}
 
-		val urlString = "https://api.telegram.org/bot$telegramToken/sendMessage"
-		val messageText = "<b>${message.sender} ${
-			DateTimeFormatter.ofPattern("dd/MM/yy HH:mm:ss").withZone(ZoneId.systemDefault()).format(
-				Instant.ofEpochMilli(message.timestamp)
+		val chunks = splitTelegramContent(message.content)
+		var chunkIndex = message.nextChunkIndex.coerceIn(0, chunks.lastIndex)
+		while (chunkIndex < chunks.size) {
+			val response = postTelegramMessage(
+				token = telegramToken,
+				chatId = telegramUserId,
+				text = formatTelegramMessage(message, chunks[chunkIndex], chunkIndex, chunks.size)
 			)
-		}</b>\n<blockquote>${message.content}</blockquote>"
-		val params = "chat_id=$telegramUserId&parse_mode=HTML&text=${URLEncoder.encode(messageText, "UTF-8")}"
 
+			when {
+				response.code in 200..299 -> {
+					chunkIndex += 1
+					message.nextChunkIndex = chunkIndex
+					message.retryCount = 0
+					QueueSingleton.updatePending(message)
+				}
+				response.code == HTTP_TOO_MANY_REQUESTS -> {
+					return SendResult.Retry(parseRetryAfterMillis(response.body), response.code)
+				}
+				response.code == HttpURLConnection.HTTP_UNAUTHORIZED ||
+					response.code == HttpURLConnection.HTTP_FORBIDDEN ||
+					response.code == HttpURLConnection.HTTP_NOT_FOUND -> {
+					return SendResult.Retry(CONFIG_RETRY_DELAY_MS, response.code)
+				}
+				response.code == HttpURLConnection.HTTP_BAD_REQUEST &&
+					(response.body.contains("chat not found", ignoreCase = true) ||
+						response.body.contains("chat_id", ignoreCase = true)) -> {
+					return SendResult.Retry(CONFIG_RETRY_DELAY_MS, response.code)
+				}
+				response.code == HttpURLConnection.HTTP_CLIENT_TIMEOUT || response.code >= 500 || response.code == -1 -> {
+					return SendResult.Retry(calculateRetryBackoff(message.retryCount), response.code)
+				}
+				else -> return SendResult.PermanentFailure(response.code)
+			}
+		}
+		return SendResult.Success
+	}
+
+	private fun postTelegramMessage(token: String, chatId: String, text: String): HttpResponse {
+		var connection: HttpURLConnection? = null
 		return try {
-			val url = URL(urlString)
-			val connection = url.openConnection() as HttpURLConnection
+			connection = URL("https://api.telegram.org/bot$token/sendMessage").openConnection() as HttpURLConnection
 			connection.requestMethod = "POST"
 			connection.doOutput = true
-			connection.connectTimeout = 15000
-			connection.readTimeout = 15000
-			connection.setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
+			connection.connectTimeout = 15_000
+			connection.readTimeout = 15_000
+			connection.setRequestProperty("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
 
-			val outputStream: OutputStream = connection.outputStream
-			outputStream.write(params.toByteArray())
-			outputStream.flush()
-			outputStream.close()
+			val params = listOf(
+				"chat_id" to chatId,
+				"parse_mode" to "HTML",
+				"text" to text
+			).joinToString("&") { (key, value) ->
+				"$key=${URLEncoder.encode(value, StandardCharsets.UTF_8.name())}"
+			}
+			connection.outputStream.use { it.write(params.toByteArray(StandardCharsets.UTF_8)) }
 
 			val responseCode = connection.responseCode
-			val bufferedReader = if (responseCode == 200) {
-				BufferedReader(InputStreamReader(connection.inputStream))
-			} else {
-				BufferedReader(InputStreamReader(connection.errorStream))
-			}
-
-			val response = bufferedReader.use(BufferedReader::readText)
-			bufferedReader.close()
-
-			Log.d("AllNotificationService", response)
-
-			connection.disconnect()
-
-			responseCode
-		} catch (e: Exception) {
-			e.printStackTrace()
-			-1
+			val responseStream = if (responseCode in 200..299) connection.inputStream else connection.errorStream
+			HttpResponse(responseCode, responseStream?.bufferedReader()?.use { it.readText() }.orEmpty())
+		} catch (exception: Exception) {
+			exception.printStackTrace()
+			HttpResponse(-1, "")
+		} finally {
+			connection?.disconnect()
 		}
+	}
+
+	private fun formatTelegramMessage(
+		message: MessageItem,
+		contentChunk: String,
+		chunkIndex: Int,
+		chunkCount: Int
+	): String {
+		val timestamp = DateTimeFormatter.ofPattern("dd/MM/yy HH:mm:ss")
+			.withZone(ZoneId.systemDefault())
+			.format(Instant.ofEpochMilli(message.timestamp))
+		val part = if (chunkCount > 1) " (${chunkIndex + 1}/$chunkCount)" else ""
+		return "<b>${escapeTelegramHtml(message.sender)} $timestamp$part</b>\n" +
+			"<blockquote>${escapeTelegramHtml(contentChunk)}</blockquote>"
+	}
+
+	private fun scheduleNext(delayMs: Long) {
+		handler.removeCallbacks(processRunnable)
+		handler.postDelayed(processRunnable, delayMs)
 	}
 
 	private fun broadcastMessage(message: MessageItem) {
 		val intent = Intent("com.spirit.smsforwarder.NEW_MESSAGE")
-		intent.setPackage(packageName)
-		intent.putExtra("messageItem", message)
+			.setPackage(packageName)
+			.putExtra("messageItem", message)
 		sendBroadcast(intent)
 	}
 
-	private fun createNotificationChannel() {
-		val channel = NotificationChannel(
-			"SMSForwarderNotificationChannel",
-			"SMSForwarder Service",
-			NotificationManager.IMPORTANCE_HIGH
-		).apply {
-			description = "Channel for SMS Forwarder service notifications"
-			setShowBadge(false)
-			lockscreenVisibility = Notification.VISIBILITY_PUBLIC
-		}
-
-		val manager = getSystemService(NotificationManager::class.java)
-		manager?.createNotificationChannel(channel)
+	private fun createNotificationChannels() {
+		val manager = getSystemService(NotificationManager::class.java) ?: return
+		manager.createNotificationChannel(
+			NotificationChannel(SERVICE_CHANNEL_ID, "SMSForwarder Service", NotificationManager.IMPORTANCE_LOW).apply {
+				description = "SMSForwarder background service status"
+				setShowBadge(false)
+				lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+			}
+		)
+		manager.createNotificationChannel(
+			NotificationChannel(RATE_LIMIT_CHANNEL_ID, "Rate Limit Alerts", NotificationManager.IMPORTANCE_HIGH).apply {
+				description = "Telegram API rate limit alerts"
+				lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+			}
+		)
 	}
 
-	fun createNotification(): Notification {
+	private fun createNotification(): Notification {
 		val intent = Intent(this, MainActivity::class.java).apply {
 			flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
 		}
 		val pendingIntent = PendingIntent.getActivity(
-			this, 0, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-		return NotificationCompat.Builder(this, "SMSForwarderNotificationChannel")
+			this,
+			0,
+			intent,
+			PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+		)
+		return NotificationCompat.Builder(this, SERVICE_CHANNEL_ID)
 			.setContentTitle("Listening for notifications")
 			.setContentText("The SMSForwarder service is running")
 			.setSmallIcon(R.drawable.small_icon)
-			.setContentIntent(pendingIntent)  // Set the content intent
+			.setContentIntent(pendingIntent)
+			.setOngoing(true)
 			.setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
 			.setPriority(NotificationCompat.PRIORITY_LOW)
 			.build()
 	}
 
-	private fun showRateLimitNotification() {
-		val channelId = "SMSForwarderRateLimitChannel"
-		val manager = getSystemService(NotificationManager::class.java)
-
-		val channel = NotificationChannel(
-			channelId,
-			"Rate Limit Alerts",
-			NotificationManager.IMPORTANCE_HIGH
-		).apply {
-			description = "Alerts for API rate limits"
-			lockscreenVisibility = Notification.VISIBILITY_PUBLIC
-		}
-		manager?.createNotificationChannel(channel)
-
-		val notification = NotificationCompat.Builder(this, channelId)
-			.setContentTitle("Telegram Rate Limit Hit!")
-			.setContentText("Sending paused for 1 hour.")
+	private fun showRateLimitNotification(delayMs: Long) {
+		val minutes = ((delayMs + 59_999L) / 60_000L).coerceAtLeast(1L)
+		val notification = NotificationCompat.Builder(this, RATE_LIMIT_CHANNEL_ID)
+			.setContentTitle("Telegram rate limit reached")
+			.setContentText("Sending paused for approximately $minutes minute(s).")
 			.setSmallIcon(R.drawable.small_icon)
 			.setPriority(NotificationCompat.PRIORITY_HIGH)
-			.setCategory(NotificationCompat.CATEGORY_ALARM)
-			.setDefaults(NotificationCompat.DEFAULT_SOUND or NotificationCompat.DEFAULT_VIBRATE)
+			.setCategory(NotificationCompat.CATEGORY_ERROR)
 			.build()
-
-		manager?.notify(2, notification)
+		getSystemService(NotificationManager::class.java)?.notify(RATE_LIMIT_NOTIFICATION_ID, notification)
 	}
 
 	private fun checkNotificationServiceHealth() {
 		val now = System.currentTimeMillis()
-		if (now - lastHealthCheckTime < 60_000L) {
-			return
-		}
+		if (now - lastHealthCheckTime < 60_000L) return
 		lastHealthCheckTime = now
 
+		val componentName = ComponentName(this, NotificationListener::class.java)
 		val enabledListeners = android.provider.Settings.Secure.getString(contentResolver, "enabled_notification_listeners")
-		val isEnabledInSettings = enabledListeners?.let {
-			val colonSplitter = android.text.TextUtils.SimpleStringSplitter(':').apply { setString(it) }
-			val componentName = android.content.ComponentName(this, NotificationListener::class.java)
-			colonSplitter.any { name -> name == componentName.flattenToString() }
-		} ?: false
-
-		if (isEnabledInSettings && !QueueSingleton.isListenerConnected) {
-			Log.w("AllNotificationService", "NotificationListenerService dead but enabled. Restarting component.")
-			val pm = packageManager
-			val componentName = android.content.ComponentName(this, NotificationListener::class.java)
-
-			try {
-				pm.setComponentEnabledSetting(
-					componentName,
-					android.content.pm.PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
-					android.content.pm.PackageManager.DONT_KILL_APP
-				)
-				
-				pm.setComponentEnabledSetting(
-					componentName,
-					android.content.pm.PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
-					android.content.pm.PackageManager.DONT_KILL_APP
-				)
-			} catch (e: Exception) {
-				e.printStackTrace()
-			}
+		val enabled = enabledListeners
+			?.split(':')
+			?.any { it == componentName.flattenToString() }
+			?: false
+		if (enabled && !QueueSingleton.isListenerConnected) {
+			NotificationListenerService.requestRebind(componentName)
 		}
 	}
 }

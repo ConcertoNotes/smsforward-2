@@ -8,5 +8,8 @@ data class MessageItem(
 	val packageName: String,
 	val timestamp: Long,
 	var isSent: Boolean = false,
-	var isError: Boolean = false
+	var isError: Boolean = false,
+	var retryCount: Int = 0,
+	var nextAttemptAt: Long = 0,
+	var nextChunkIndex: Int = 0
 ) : Serializable

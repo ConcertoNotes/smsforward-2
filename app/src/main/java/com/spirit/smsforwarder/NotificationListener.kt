@@ -8,9 +8,22 @@ import com.spirit.smsforwarder.model.MessageItem
 import com.spirit.smsforwarder.model.QueueSingleton
 
 class NotificationListener : NotificationListenerService() {
+	private companion object {
+		val EXCLUDED_PACKAGES = setOf(
+			"com.google.android.apps.messaging",
+			"com.android.messaging",
+			"com.spirit.smsforwarder",
+			"com.xiaomi.discover",
+			"android",
+			"com.android.systemui",
+			"com.google.android.gms",
+			"com.android.vending"
+		)
+	}
 
 	override fun onListenerConnected() {
 		super.onListenerConnected()
+		QueueSingleton.initialize(this)
 		QueueSingleton.isListenerConnected = true
 	}
 
@@ -20,49 +33,36 @@ class NotificationListener : NotificationListenerService() {
 	}
 
 	override fun onNotificationPosted(sbn: StatusBarNotification) {
-		val excludedPackages = setOf("com.google.android.apps.messaging", "com.android.messaging", "com.spirit.smsforwarder", "com.xiaomi.discover", "android", "com.android.systemui", "com.google.android.gms", "com.android.vending") // avoids sms, own notifications, system processes and other useless crud
 		val packageName = sbn.packageName
-		if (!excludedPackages.contains(packageName) && !getSharedPreferences("smsforwarder_prefs", 0).getBoolean("${packageName}_ignore_enabled", false)) {
-			//Log.d("NotificationListener", "${packageName}_ignore_enabled = ${getSharedPreferences("smsforwarder_prefs", 0).getBoolean("${packageName}_ignore_enabled", false)}")
+		if (packageName !in EXCLUDED_PACKAGES && !getSharedPreferences("smsforwarder_prefs", 0).getBoolean("${packageName}_ignore_enabled", false)) {
 			val notification = sbn.notification
 			val extras = notification.extras
 			val appName = getAppName(packageName)
-			val message = buildString {
-				append("Title: ${extras.getCharSequence(Notification.EXTRA_TITLE)}\n")
-				extras.getCharSequence(Notification.EXTRA_TEXT)?.let {
-					append("Text: $it")
-				}
-				extras.getCharSequence(Notification.EXTRA_BIG_TEXT)?.let {
-					append("\n$it")
-				}
-				extras.getCharSequence(Notification.EXTRA_SUB_TEXT)?.let {
-					append("\n$it")
-				}
-				extras.getCharSequence(Notification.EXTRA_INFO_TEXT)?.let {
-					append("\n$it")
-				}
-			}
+			val messageParts = linkedSetOf<String>()
+			extras.getCharSequence(Notification.EXTRA_TITLE)?.toString()?.takeIf { it.isNotBlank() }
+				?.let { messageParts.add("Title: $it") }
+			extras.getCharSequence(Notification.EXTRA_TEXT)?.toString()?.takeIf { it.isNotBlank() }
+				?.let { messageParts.add("Text: $it") }
+			extras.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString()?.takeIf { it.isNotBlank() }
+				?.let { messageParts.add(it) }
+			extras.getCharSequence(Notification.EXTRA_SUB_TEXT)?.toString()?.takeIf { it.isNotBlank() }
+				?.let { messageParts.add(it) }
+			extras.getCharSequence(Notification.EXTRA_INFO_TEXT)?.toString()?.takeIf { it.isNotBlank() }
+				?.let { messageParts.add(it) }
+			if (messageParts.isEmpty()) return
 
 			val msg = MessageItem(
-				content = message,
+				content = messageParts.joinToString("\n"),
 				sender = appName,
 				packageName = packageName,
 				timestamp = sbn.postTime
 			)
 
-			if (!QueueSingleton.containsMessage(msg)) {
-				QueueSingleton.messageQueue.add(msg)
-				QueueSingleton.wakeUp()
+			if (QueueSingleton.enqueue(this, msg)) {
+				QueueSingleton.wakeUp(this)
 			}
 
 		}
-	}
-
-	override fun onNotificationRemoved(sbn: StatusBarNotification) {
-		// Android 14 shenanigans
-		if(sbn.packageName == "com.spirit.smsforwarder")
-			QueueSingleton.notificationDismissed = true
-		//Log.d("NotificationListener", "Notification dismissed: ${sbn.notification.extras.getString("android.text")}")
 	}
 
 	private fun getAppName(packageName: String): String {

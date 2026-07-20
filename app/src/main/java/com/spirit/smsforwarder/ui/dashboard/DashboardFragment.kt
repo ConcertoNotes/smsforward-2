@@ -48,6 +48,7 @@ class DashboardFragment : Fragment() {
 		_binding = FragmentDashboardBinding.inflate(inflater, container, false)
 		val root: View = binding.root
 		messageContainer = binding.messageContainer
+		QueueSingleton.initialize(requireContext())
 
 		return root
 	}

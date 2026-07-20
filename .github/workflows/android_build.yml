@@ -1,46 +1,51 @@
-name: Android CI
+name: Build Android APK
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [main]
   pull_request:
-    branches: [ "main" ]
+    branches: [main]
+  workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
+    name: Test, lint, and build APK
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v4
-      - name: set up JDK 17
-        uses: actions/setup-java@v3
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
         with:
-          java-version: '17'
-          distribution: 'temurin'
+          java-version: "17"
+          distribution: temurin
           cache: gradle
 
-      - name: Grant execute permission for gradlew
+      - name: Grant Gradle wrapper permission
         run: chmod +x gradlew
-      - name: Build with Gradle
-        run: ./gradlew build
-      - name: Build Release APK
-        run: ./gradlew assembleRelease
 
-      - name: Set current date as env variable
-        run: echo "NOW_LONG=$(date +'%Y-%m-%dT%H:%M:%S')" >> $GITHUB_ENV
+      - name: Test, lint, and build Debug APK
+        run: ./gradlew testDebugUnitTest lintDebug assembleDebug --no-daemon
 
-      - name: Set release hash as env variable
-        run: echo "SHA_SHORT=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+      - name: Prepare installable APK
+        if: github.event_name != 'pull_request'
+        run: cp app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/debug/SMSForwarder-debug.apk
 
-      - name: Create Release and Upload APK
-        uses: softprops/action-gh-release@v1
+      - name: Upload APK
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
         with:
-          tag_name: AutoRelease_${{ env.SHA_SHORT }}
-          name: Automatic release ${{ env.NOW_LONG }}
-          draft: false
-          prerelease: false
-          files: ./app/build/outputs/apk/release/app-release-unsigned.apk
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          name: SMSForwarder-debug-${{ github.run_number }}
+          path: app/build/outputs/apk/debug/SMSForwarder-debug.apk
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0

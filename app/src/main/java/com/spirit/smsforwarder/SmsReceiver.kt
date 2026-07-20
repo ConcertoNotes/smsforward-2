@@ -22,19 +22,18 @@ class SmsReceiver : BroadcastReceiver() {
 			}
 
 			val messages = Telephony.Sms.Intents.getMessagesFromIntent(intent)
-			for (message in messages) {
-				//Log.d("SmsReceiver", "SMS received from ${message.displayOriginatingAddress}: ${message.displayMessageBody}")
-				val msg = MessageItem(
-					content = message.displayMessageBody,
-					sender = "SMS from ${message.displayOriginatingAddress}",
-					packageName = "SMS message",
-					timestamp = message.timestampMillis
-				)
+			if (messages.isEmpty()) return
 
-				if (!QueueSingleton.containsMessage(msg)) {
-					QueueSingleton.messageQueue.add(msg)
-					QueueSingleton.wakeUp()
-				}
+			val firstMessage = messages.first()
+			val msg = MessageItem(
+				content = messages.joinToString(separator = "") { it.displayMessageBody.orEmpty() },
+				sender = "SMS from ${firstMessage.displayOriginatingAddress}",
+				packageName = "SMS message",
+				timestamp = messages.minOf { it.timestampMillis }
+			)
+
+			if (QueueSingleton.enqueue(context, msg)) {
+				QueueSingleton.wakeUp(context)
 			}
 		}
 	}

@@ -12,6 +12,7 @@
 			android:layout_width="wrap_content"
 			android:layout_height="wrap_content"
 			android:inputType="textPassword"
+			android:importantForAutofill="no"
 			android:ems="10"
 			app:layout_constraintEnd_toEndOf="parent"
 			android:layout_marginEnd="8dp"
@@ -19,10 +20,10 @@
 			android:layout_marginTop="8dp"/>
 
 	<TextView
-			android:id="@+id/textView"
 			android:layout_width="wrap_content"
 			android:layout_height="wrap_content"
 			android:text="@string/tg_token_text"
+			android:labelFor="@id/telegramTokenInput"
 			app:layout_constraintEnd_toStartOf="@+id/telegramTokenInput"
 			app:layout_constraintStart_toStartOf="parent"
 			app:layout_constraintTop_toTopOf="@+id/telegramTokenInput"
@@ -30,10 +31,10 @@
 			android:textAppearance="@style/TextAppearance.AppCompat.Body1"/>
 
 	<TextView
-			android:id="@+id/userIdTextView"
 			android:layout_width="wrap_content"
 			android:layout_height="wrap_content"
 			android:text="@string/tg_user_id_text"
+			android:labelFor="@id/whoToMessageID"
 			app:layout_constraintEnd_toStartOf="@+id/whoToMessageID"
 			app:layout_constraintStart_toStartOf="parent"
 			app:layout_constraintTop_toTopOf="@+id/whoToMessageID"
@@ -44,7 +45,8 @@
 			android:id="@+id/whoToMessageID"
 			android:layout_width="wrap_content"
 			android:layout_height="wrap_content"
-			android:inputType="number"
+			android:inputType="numberSigned"
+			android:importantForAutofill="no"
 			android:ems="10"
 			app:layout_constraintEnd_toEndOf="parent"
 			android:layout_marginEnd="8dp"
@@ -103,7 +105,6 @@
 			app:layout_constraintBottom_toBottomOf="@+id/searchView"/>
 
 	<View
-			android:id="@+id/divider"
 			android:layout_width="0dp"
 			android:layout_height="1dp"
 			android:background="?android:attr/listDivider"
