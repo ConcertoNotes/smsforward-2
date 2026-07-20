@@ -1,15 +1,28 @@
 pluginManagement {
+    val isCiBuild = System.getenv("CI").equals("true", ignoreCase = true)
     repositories {
-        maven("https://maven.aliyun.com/repository/google")
-        maven("https://maven.aliyun.com/repository/central")
-        maven("https://maven.aliyun.com/repository/gradle-plugin")
+        if (isCiBuild) {
+            google()
+            mavenCentral()
+            gradlePluginPortal()
+        } else {
+            maven("https://maven.aliyun.com/repository/google")
+            maven("https://maven.aliyun.com/repository/central")
+            maven("https://maven.aliyun.com/repository/gradle-plugin")
+        }
     }
 }
 dependencyResolutionManagement {
+    val isCiBuild = System.getenv("CI").equals("true", ignoreCase = true)
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
     repositories {
-        maven("https://maven.aliyun.com/repository/google")
-        maven("https://maven.aliyun.com/repository/central")
+        if (isCiBuild) {
+            google()
+            mavenCentral()
+        } else {
+            maven("https://maven.aliyun.com/repository/google")
+            maven("https://maven.aliyun.com/repository/central")
+        }
     }
 }
 
