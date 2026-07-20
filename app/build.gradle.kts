@@ -4,11 +4,11 @@ plugins {
 }
 
 android {
-    namespace = "com.spirit.smsforwarder"
+    namespace = "com.concertonotes.smsforwarder"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.spirit.smsforwarder"
+        applicationId = "com.concertonotes.smsforwarder"
         minSdk = 26
         targetSdk = 35
 		versionCode = 13

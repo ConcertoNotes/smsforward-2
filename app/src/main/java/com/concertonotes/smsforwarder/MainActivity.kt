@@ -1,4 +1,4 @@
-package com.spirit.smsforwarder
+package com.concertonotes.smsforwarder
 
 import android.content.ComponentName
 import android.content.Intent
@@ -17,7 +17,7 @@ import androidx.navigation.findNavController
 import androidx.navigation.ui.AppBarConfiguration
 import androidx.navigation.ui.setupActionBarWithNavController
 import androidx.navigation.ui.setupWithNavController
-import com.spirit.smsforwarder.databinding.ActivityMainBinding
+import com.concertonotes.smsforwarder.databinding.ActivityMainBinding
 
 class MainActivity : AppCompatActivity() {
 

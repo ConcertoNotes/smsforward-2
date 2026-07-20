@@ -1,4 +1,4 @@
-package com.spirit.smsforwarder.model
+package com.concertonotes.smsforwarder.model
 
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue

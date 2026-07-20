@@ -1,4 +1,4 @@
-package com.spirit.smsforwarder.model
+package com.concertonotes.smsforwarder.model
 
 import android.annotation.SuppressLint
 import android.content.Context
@@ -6,6 +6,8 @@ import android.os.PowerManager
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.ConcurrentLinkedQueue
+
+const val APP_PREFERENCES_NAME = "concerto_smsforwarder_prefs"
 
 internal fun isSamePendingMessage(first: MessageItem, second: MessageItem): Boolean {
 	return first.timestamp == second.timestamp &&
@@ -15,7 +17,6 @@ internal fun isSamePendingMessage(first: MessageItem, second: MessageItem): Bool
 }
 
 object QueueSingleton {
-	private const val PREFS_NAME = "smsforwarder_prefs"
 	private const val PENDING_MESSAGES_KEY = "pending_messages"
 	private const val MAX_HISTORY_SIZE = 200
 	private const val WAKE_LOCK_TIMEOUT_MS = 60_000L
@@ -39,13 +40,13 @@ object QueueSingleton {
 			if (initialized) return
 
 			applicationContext = context.applicationContext
-			val preferences = applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+			val preferences = applicationContext.getSharedPreferences(APP_PREFERENCES_NAME, Context.MODE_PRIVATE)
 			restoreQueue(preferences.getString(PENDING_MESSAGES_KEY, null), messageQueue)
 
 			val powerManager = applicationContext.getSystemService(Context.POWER_SERVICE) as PowerManager
 			wakeLock = powerManager.newWakeLock(
 				PowerManager.PARTIAL_WAKE_LOCK,
-				"SMSForwarder::MessageProcessing"
+				"ConcertoSMSForwarder::MessageProcessing"
 			).apply { setReferenceCounted(false) }
 			initialized = true
 		}
@@ -107,7 +108,7 @@ object QueueSingleton {
 	@SuppressLint("ApplySharedPref")
 	private fun persistLocked() {
 		if (!initialized) return
-		applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+		applicationContext.getSharedPreferences(APP_PREFERENCES_NAME, Context.MODE_PRIVATE)
 			.edit()
 			.putString(PENDING_MESSAGES_KEY, queueToJson(messageQueue).toString())
 			.commit()

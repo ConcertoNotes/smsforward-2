@@ -26,5 +26,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "SMSForwarder"
+rootProject.name = "ConcertoSMSForwarder"
 include(":app")

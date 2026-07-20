@@ -1,4 +1,4 @@
-package com.spirit.smsforwarder.ui.dashboard
+package com.concertonotes.smsforwarder.ui.dashboard
 
 import android.annotation.SuppressLint
 import android.content.BroadcastReceiver
@@ -17,10 +17,10 @@ import android.widget.Toast
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.ViewModelProvider
-import com.spirit.smsforwarder.R
-import com.spirit.smsforwarder.databinding.FragmentDashboardBinding
-import com.spirit.smsforwarder.model.MessageItem
-import com.spirit.smsforwarder.model.QueueSingleton
+import com.concertonotes.smsforwarder.R
+import com.concertonotes.smsforwarder.databinding.FragmentDashboardBinding
+import com.concertonotes.smsforwarder.model.MessageItem
+import com.concertonotes.smsforwarder.model.QueueSingleton
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -56,7 +56,7 @@ class DashboardFragment : Fragment() {
 	@SuppressLint("UnspecifiedRegisterReceiverFlag")
 	override fun onResume() {
 		super.onResume()
-		val intentFilter = IntentFilter("com.spirit.smsforwarder.NEW_MESSAGE")
+		val intentFilter = IntentFilter("${requireContext().packageName}.NEW_MESSAGE")
 		if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
 			context?.registerReceiver(messageReceiver, intentFilter, Context.RECEIVER_NOT_EXPORTED)
 		} else {

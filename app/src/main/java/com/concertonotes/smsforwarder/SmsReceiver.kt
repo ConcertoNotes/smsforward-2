@@ -1,12 +1,12 @@
-package com.spirit.smsforwarder
+package com.concertonotes.smsforwarder
 
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.provider.Telephony
 //import android.util.Log
-import com.spirit.smsforwarder.model.MessageItem
-import com.spirit.smsforwarder.model.QueueSingleton
+import com.concertonotes.smsforwarder.model.MessageItem
+import com.concertonotes.smsforwarder.model.QueueSingleton
 
 class SmsReceiver : BroadcastReceiver() {
 	override fun onReceive(context: Context, intent: Intent) {

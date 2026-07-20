@@ -1,18 +1,18 @@
-package com.spirit.smsforwarder
+package com.concertonotes.smsforwarder
 
 import android.app.Notification
 import android.content.pm.PackageManager
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
-import com.spirit.smsforwarder.model.MessageItem
-import com.spirit.smsforwarder.model.QueueSingleton
+import com.concertonotes.smsforwarder.model.APP_PREFERENCES_NAME
+import com.concertonotes.smsforwarder.model.MessageItem
+import com.concertonotes.smsforwarder.model.QueueSingleton
 
 class NotificationListener : NotificationListenerService() {
 	private companion object {
 		val EXCLUDED_PACKAGES = setOf(
 			"com.google.android.apps.messaging",
 			"com.android.messaging",
-			"com.spirit.smsforwarder",
 			"com.xiaomi.discover",
 			"android",
 			"com.android.systemui",
@@ -34,7 +34,10 @@ class NotificationListener : NotificationListenerService() {
 
 	override fun onNotificationPosted(sbn: StatusBarNotification) {
 		val packageName = sbn.packageName
-		if (packageName !in EXCLUDED_PACKAGES && !getSharedPreferences("smsforwarder_prefs", 0).getBoolean("${packageName}_ignore_enabled", false)) {
+		if (packageName != applicationContext.packageName &&
+			packageName !in EXCLUDED_PACKAGES &&
+			!getSharedPreferences(APP_PREFERENCES_NAME, 0).getBoolean("${packageName}_ignore_enabled", false)
+		) {
 			val notification = sbn.notification
 			val extras = notification.extras
 			val appName = getAppName(packageName)

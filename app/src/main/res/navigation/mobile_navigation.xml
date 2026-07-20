@@ -6,7 +6,7 @@
 
     <fragment
             android:id="@+id/navigation_dashboard"
-            android:name="com.spirit.smsforwarder.ui.dashboard.DashboardFragment"
+            android:name="com.concertonotes.smsforwarder.ui.dashboard.DashboardFragment"
             android:label="@string/title_dashboard"
             tools:layout="@layout/fragment_dashboard">
         <action
@@ -17,7 +17,7 @@
 
     <fragment
             android:id="@+id/navigation_configuration"
-            android:name="com.spirit.smsforwarder.ui.notifications.ConfigurationFragment"
+            android:name="com.concertonotes.smsforwarder.ui.notifications.ConfigurationFragment"
             android:label="@string/title_configuration"
             tools:layout="@layout/fragment_configuration">
         <action

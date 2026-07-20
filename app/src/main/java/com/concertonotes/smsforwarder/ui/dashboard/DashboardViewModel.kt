@@ -1,4 +1,4 @@
-package com.spirit.smsforwarder.ui.dashboard
+package com.concertonotes.smsforwarder.ui.dashboard
 
 import androidx.lifecycle.ViewModel
 

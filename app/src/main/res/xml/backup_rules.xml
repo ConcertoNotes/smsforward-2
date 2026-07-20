@@ -7,5 +7,5 @@
    See https://developer.android.com/about/versions/12/backup-restore
 -->
 <full-backup-content>
-	<exclude domain="sharedpref" path="smsforwarder_prefs.xml"/>
+	<exclude domain="sharedpref" path="concerto_smsforwarder_prefs.xml"/>
 </full-backup-content>

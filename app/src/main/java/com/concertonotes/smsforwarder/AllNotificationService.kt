@@ -1,4 +1,4 @@
-package com.spirit.smsforwarder
+package com.concertonotes.smsforwarder
 
 import android.app.Notification
 import android.app.NotificationChannel
@@ -12,8 +12,9 @@ import android.os.IBinder
 import android.os.Looper
 import android.service.notification.NotificationListenerService
 import androidx.core.app.NotificationCompat
-import com.spirit.smsforwarder.model.MessageItem
-import com.spirit.smsforwarder.model.QueueSingleton
+import com.concertonotes.smsforwarder.model.APP_PREFERENCES_NAME
+import com.concertonotes.smsforwarder.model.MessageItem
+import com.concertonotes.smsforwarder.model.QueueSingleton
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
@@ -80,8 +81,8 @@ class AllNotificationService : Service() {
 	private companion object {
 		const val SERVICE_NOTIFICATION_ID = 1
 		const val RATE_LIMIT_NOTIFICATION_ID = 2
-		const val SERVICE_CHANNEL_ID = "SMSForwarderServiceChannelV2"
-		const val RATE_LIMIT_CHANNEL_ID = "SMSForwarderRateLimitChannel"
+		const val SERVICE_CHANNEL_ID = "ConcertoSMSForwarderServiceChannel"
+		const val RATE_LIMIT_CHANNEL_ID = "ConcertoSMSForwarderRateLimitChannel"
 		const val HTTP_TOO_MANY_REQUESTS = 429
 		const val MAX_MESSAGE_AGE_MS = 14L * 24 * 60 * 60 * 1000
 		const val IDLE_POLL_INTERVAL_MS = 5_000L
@@ -195,7 +196,7 @@ class AllNotificationService : Service() {
 	}
 
 	private fun sendMessage(message: MessageItem): SendResult {
-		val preferences = getSharedPreferences("smsforwarder_prefs", MODE_PRIVATE)
+		val preferences = getSharedPreferences(APP_PREFERENCES_NAME, MODE_PRIVATE)
 		val telegramToken = preferences.getString("telegram_token", null)
 		val telegramUserId = preferences.getString("telegram_user_id", null)
 		if (telegramToken.isNullOrBlank() || telegramUserId.isNullOrBlank() || ':' !in telegramToken) {
@@ -290,7 +291,7 @@ class AllNotificationService : Service() {
 	}
 
 	private fun broadcastMessage(message: MessageItem) {
-		val intent = Intent("com.spirit.smsforwarder.NEW_MESSAGE")
+		val intent = Intent("$packageName.NEW_MESSAGE")
 			.setPackage(packageName)
 			.putExtra("messageItem", message)
 		sendBroadcast(intent)
@@ -299,8 +300,8 @@ class AllNotificationService : Service() {
 	private fun createNotificationChannels() {
 		val manager = getSystemService(NotificationManager::class.java) ?: return
 		manager.createNotificationChannel(
-			NotificationChannel(SERVICE_CHANNEL_ID, "SMSForwarder Service", NotificationManager.IMPORTANCE_LOW).apply {
-				description = "SMSForwarder background service status"
+			NotificationChannel(SERVICE_CHANNEL_ID, "Concerto SMS Forwarder Service", NotificationManager.IMPORTANCE_LOW).apply {
+				description = "Concerto SMS Forwarder background service status"
 				setShowBadge(false)
 				lockscreenVisibility = Notification.VISIBILITY_PUBLIC
 			}
@@ -325,7 +326,7 @@ class AllNotificationService : Service() {
 		)
 		return NotificationCompat.Builder(this, SERVICE_CHANNEL_ID)
 			.setContentTitle("Listening for notifications")
-			.setContentText("The SMSForwarder service is running")
+			.setContentText("Concerto SMS Forwarder is running")
 			.setSmallIcon(R.drawable.small_icon)
 			.setContentIntent(pendingIntent)
 			.setOngoing(true)

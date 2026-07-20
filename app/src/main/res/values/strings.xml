@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">SMSForwarder</string>
+    <string name="app_name">Concerto SMS Forwarder</string>
     <string name="title_dashboard">Notifications</string>
     <string name="title_configuration">Configuration</string>
 

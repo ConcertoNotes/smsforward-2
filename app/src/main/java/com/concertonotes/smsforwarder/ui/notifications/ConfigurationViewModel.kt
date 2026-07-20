@@ -1,14 +1,15 @@
-package com.spirit.smsforwarder.ui.notifications
+package com.concertonotes.smsforwarder.ui.notifications
 
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
 import android.content.SharedPreferences
+import com.concertonotes.smsforwarder.model.APP_PREFERENCES_NAME
 
 class ConfigurationViewModel(application: Application) : AndroidViewModel(application) {
     private val sharedPreferences: SharedPreferences =
-        getApplication<Application>().getSharedPreferences("smsforwarder_prefs", 0)
+        getApplication<Application>().getSharedPreferences(APP_PREFERENCES_NAME, 0)
 
     private val _telegramToken = MutableLiveData<String>().apply {
         value = sharedPreferences.getString("telegram_token", "")

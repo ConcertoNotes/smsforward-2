@@ -1,4 +1,4 @@
-package com.spirit.smsforwarder
+package com.concertonotes.smsforwarder
 
 import android.content.BroadcastReceiver
 import android.content.Context

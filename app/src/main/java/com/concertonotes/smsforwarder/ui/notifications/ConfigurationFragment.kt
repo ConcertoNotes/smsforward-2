@@ -1,4 +1,4 @@
-package com.spirit.smsforwarder.ui.notifications
+package com.concertonotes.smsforwarder.ui.notifications
 
 import android.content.pm.PackageManager
 import android.os.Bundle
@@ -11,8 +11,8 @@ import android.widget.*
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.lifecycleScope
-import com.spirit.smsforwarder.R
-import com.spirit.smsforwarder.databinding.FragmentConfigurationBinding
+import com.concertonotes.smsforwarder.R
+import com.concertonotes.smsforwarder.databinding.FragmentConfigurationBinding
 import kotlinx.coroutines.*
 
 class ConfigurationFragment : Fragment() {
