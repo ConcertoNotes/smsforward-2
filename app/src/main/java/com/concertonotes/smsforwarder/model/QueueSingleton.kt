@@ -16,6 +16,12 @@ internal fun isSamePendingMessage(first: MessageItem, second: MessageItem): Bool
 		first.packageName == second.packageName
 }
 
+internal fun selectNextReadyMessage(messages: Iterable<MessageItem>, now: Long): MessageItem? {
+	return messages.asSequence()
+		.filter { it.nextAttemptAt <= now }
+		.minWithOrNull(compareBy<MessageItem> { it.retryCount }.thenBy { it.timestamp })
+}
+
 object QueueSingleton {
 	private const val PENDING_MESSAGES_KEY = "pending_messages"
 	private const val MAX_HISTORY_SIZE = 200
@@ -33,6 +39,12 @@ object QueueSingleton {
 	var isListenerConnected = false
 
 	private var wakeLock: PowerManager.WakeLock? = null
+	@Volatile
+	private var queueChangedListener: (() -> Unit)? = null
+
+	fun setQueueChangedListener(listener: (() -> Unit)?) {
+		queueChangedListener = listener
+	}
 
 	fun initialize(context: Context) {
 		if (initialized) return
@@ -62,12 +74,22 @@ object QueueSingleton {
 
 	fun enqueue(context: Context, item: MessageItem): Boolean {
 		initialize(context)
-		synchronized(stateLock) {
-			if (containsMessage(item)) return false
+		val added = synchronized(stateLock) {
+			if (containsMessage(item)) return@synchronized false
 			messageQueue.add(item)
 			persistLocked()
-			return true
+			true
 		}
+		if (added) queueChangedListener?.invoke()
+		return added
+	}
+
+	fun retryPendingNow() {
+		synchronized(stateLock) {
+			messageQueue.forEach { it.nextAttemptAt = 0 }
+			persistLocked()
+		}
+		queueChangedListener?.invoke()
 	}
 
 	fun updatePending(item: MessageItem) {

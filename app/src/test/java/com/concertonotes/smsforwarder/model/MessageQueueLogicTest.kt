@@ -1,6 +1,7 @@
 package com.concertonotes.smsforwarder.model
 
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -30,5 +31,23 @@ class MessageQueueLogicTest {
 	@Test
 	fun isSamePendingMessage_keepsDifferentSourceAtSameTime() {
 		assertFalse(isSamePendingMessage(original, original.copy(packageName = "com.example.app")))
+	}
+
+	@Test
+	fun selectNextReadyMessage_skipsDelayedRetryAtQueueHead() {
+		val now = 1_700_000_100_000L
+		val delayed = original.copy(nextAttemptAt = now + 60_000L)
+		val ready = original.copy(timestamp = original.timestamp + 1_000L)
+
+		assertEquals(ready, selectNextReadyMessage(listOf(delayed, ready), now))
+	}
+
+	@Test
+	fun selectNextReadyMessage_prioritizesFreshMessagesOverRetries() {
+		val now = 1_700_000_100_000L
+		val retry = original.copy(retryCount = 4)
+		val fresh = original.copy(timestamp = original.timestamp + 1_000L)
+
+		assertEquals(fresh, selectNextReadyMessage(listOf(retry, fresh), now))
 	}
 }

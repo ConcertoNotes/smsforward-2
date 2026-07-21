@@ -16,6 +16,7 @@ import androidx.core.app.NotificationCompat
 import com.concertonotes.smsforwarder.model.APP_PREFERENCES_NAME
 import com.concertonotes.smsforwarder.model.MessageItem
 import com.concertonotes.smsforwarder.model.QueueSingleton
+import com.concertonotes.smsforwarder.model.selectNextReadyMessage
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URI
@@ -27,6 +28,7 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Base64
 import java.util.concurrent.Executors
+import java.util.concurrent.Future
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 import kotlin.math.min
@@ -130,13 +132,14 @@ class AllNotificationService : Service() {
 		const val RATE_LIMIT_CHANNEL_ID = "ConcertoSMSForwarderRateLimitChannel"
 		const val HTTP_TOO_MANY_REQUESTS = 429
 		const val MAX_MESSAGE_AGE_MS = 14L * 24 * 60 * 60 * 1000
-		const val IDLE_POLL_INTERVAL_MS = 5_000L
+		const val IDLE_POLL_INTERVAL_MS = 1_000L
 		const val BUSY_POLL_INTERVAL_MS = 500L
 		const val CONFIG_RETRY_DELAY_MS = 60_000L
 	}
 
 	private val handler = Handler(Looper.getMainLooper())
 	private val executorService = Executors.newSingleThreadExecutor()
+	private val channelExecutor = Executors.newFixedThreadPool(2)
 	@Volatile
 	private var isProcessingMessage = false
 	@Volatile
@@ -144,6 +147,11 @@ class AllNotificationService : Service() {
 	@Volatile
 	private var startupFailed = false
 	private var lastHealthCheckTime = System.currentTimeMillis()
+	private val queueChangedListener: () -> Unit = {
+		handler.post {
+			if (!destroyed) scheduleNext(0)
+		}
+	}
 
 	private sealed class SendResult {
 		object Success : SendResult()
@@ -159,16 +167,16 @@ class AllNotificationService : Service() {
 			checkNotificationServiceHealth()
 			QueueSingleton.discardPendingOlderThan(System.currentTimeMillis() - MAX_MESSAGE_AGE_MS)
 
-			val message = QueueSingleton.messageQueue.peek()
+			val now = System.currentTimeMillis()
+			val message = selectNextReadyMessage(QueueSingleton.messageQueue, now)
 			if (message == null) {
 				QueueSingleton.releaseWakeLock()
-				scheduleNext(IDLE_POLL_INTERVAL_MS)
-				return
-			}
-
-			val waitTime = message.nextAttemptAt - System.currentTimeMillis()
-			if (waitTime > 0) {
-				scheduleNext(min(waitTime, IDLE_POLL_INTERVAL_MS))
+				val nextAttemptAt = QueueSingleton.messageQueue
+					.map { it.nextAttemptAt }
+					.filter { it > now }
+					.minOrNull()
+				val delay = nextAttemptAt?.let { min(it - now, IDLE_POLL_INTERVAL_MS) } ?: IDLE_POLL_INTERVAL_MS
+				scheduleNext(delay)
 				return
 			}
 
@@ -193,6 +201,7 @@ class AllNotificationService : Service() {
 	override fun onCreate() {
 		super.onCreate()
 		try {
+			QueueSingleton.setQueueChangedListener(queueChangedListener)
 			createNotificationChannels()
 			startForeground(SERVICE_NOTIFICATION_ID, createNotification())
 			QueueSingleton.initialize(this)
@@ -219,8 +228,10 @@ class AllNotificationService : Service() {
 
 	override fun onDestroy() {
 		destroyed = true
+		QueueSingleton.setQueueChangedListener(null)
 		handler.removeCallbacks(processRunnable)
 		executorService.shutdownNow()
+		channelExecutor.shutdownNow()
 		QueueSingleton.releaseWakeLock()
 		super.onDestroy()
 	}
@@ -270,9 +281,16 @@ class AllNotificationService : Service() {
 			return SendResult.Retry(CONFIG_RETRY_DELAY_MS, -1)
 		}
 
+		val telegramFuture: Future<SendResult>? = if (telegramConfigured && !message.telegramDelivered) {
+			channelExecutor.submit<SendResult> { sendTelegramMessage(message, telegramToken, telegramUserId) }
+		} else null
+		val feishuFuture: Future<SendResult>? = if (feishuConfigured && !message.feishuDelivered) {
+			channelExecutor.submit<SendResult> { sendFeishuMessage(message, feishuWebhook, feishuSecret) }
+		} else null
+
 		var failure: SendResult? = null
-		if (telegramConfigured && !message.telegramDelivered) {
-			val telegramResult = sendTelegramMessage(message, telegramToken, telegramUserId)
+		if (telegramFuture != null) {
+			val telegramResult = awaitSendResult(telegramFuture)
 			if (telegramResult == SendResult.Success) {
 				message.telegramDelivered = true
 				message.nextChunkIndex = 0
@@ -282,8 +300,8 @@ class AllNotificationService : Service() {
 			}
 		}
 
-		if (feishuConfigured && !message.feishuDelivered) {
-			val feishuResult = sendFeishuMessage(message, feishuWebhook, feishuSecret)
+		if (feishuFuture != null) {
+			val feishuResult = awaitSendResult(feishuFuture)
 			if (feishuResult == SendResult.Success) {
 				message.feishuDelivered = true
 				message.nextFeishuChunkIndex = 0
@@ -294,6 +312,15 @@ class AllNotificationService : Service() {
 		}
 
 		return failure ?: SendResult.Success
+	}
+
+	private fun awaitSendResult(future: Future<SendResult>): SendResult {
+		return try {
+			future.get()
+		} catch (exception: Exception) {
+			Log.e("ConcertoForwarder", "Message channel worker failed", exception)
+			SendResult.Retry(calculateRetryBackoff(0), -1)
+		}
 	}
 
 	private fun mergeSendFailures(current: SendResult?, next: SendResult): SendResult {
@@ -382,8 +409,8 @@ class AllNotificationService : Service() {
 			connection = URL("https://api.telegram.org/bot$token/sendMessage").openConnection() as HttpURLConnection
 			connection.requestMethod = "POST"
 			connection.doOutput = true
-			connection.connectTimeout = 15_000
-			connection.readTimeout = 15_000
+			connection.connectTimeout = 6_000
+			connection.readTimeout = 6_000
 			connection.setRequestProperty("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
 
 			val params = listOf(
@@ -412,8 +439,8 @@ class AllNotificationService : Service() {
 			connection = URL(webhook).openConnection() as HttpURLConnection
 			connection.requestMethod = "POST"
 			connection.doOutput = true
-			connection.connectTimeout = 15_000
-			connection.readTimeout = 15_000
+			connection.connectTimeout = 6_000
+			connection.readTimeout = 6_000
 			connection.setRequestProperty("Content-Type", "application/json; charset=UTF-8")
 
 			val payload = JSONObject()

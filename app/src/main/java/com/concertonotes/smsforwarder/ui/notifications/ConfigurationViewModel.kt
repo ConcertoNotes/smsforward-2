@@ -6,6 +6,7 @@ import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
 import android.content.SharedPreferences
 import com.concertonotes.smsforwarder.model.APP_PREFERENCES_NAME
+import com.concertonotes.smsforwarder.model.QueueSingleton
 
 class ConfigurationViewModel(application: Application) : AndroidViewModel(application) {
     private val sharedPreferences: SharedPreferences =
@@ -34,21 +35,30 @@ class ConfigurationViewModel(application: Application) : AndroidViewModel(applic
     fun saveTelegramToken(token: String) {
         _telegramToken.value = token
         sharedPreferences.edit().putString("telegram_token", token).apply()
+        wakePendingMessages()
     }
 
     fun saveUserId(id: String) {
         _userId.value = id
         sharedPreferences.edit().putString("telegram_user_id", id).apply()
+        wakePendingMessages()
     }
 
     fun saveFeishuWebhook(webhook: String) {
         _feishuWebhook.value = webhook
         sharedPreferences.edit().putString("feishu_webhook", webhook.trim()).apply()
+        wakePendingMessages()
     }
 
     fun saveFeishuSecret(secret: String) {
         _feishuSecret.value = secret
         sharedPreferences.edit().putString("feishu_secret", secret.trim()).apply()
+        wakePendingMessages()
+    }
+
+    private fun wakePendingMessages() {
+        QueueSingleton.retryPendingNow()
+        QueueSingleton.wakeUp(getApplication())
     }
 
     fun getAppEnabled(packageName: String): Boolean {
