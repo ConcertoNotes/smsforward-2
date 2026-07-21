@@ -9,11 +9,13 @@
 
 	<EditText
 			android:id="@+id/telegramTokenInput"
-			android:layout_width="wrap_content"
+			android:layout_width="0dp"
 			android:layout_height="wrap_content"
 			android:inputType="textPassword"
 			android:importantForAutofill="no"
-			android:ems="10"
+			android:singleLine="true"
+			app:layout_constraintStart_toStartOf="parent"
+			android:layout_marginStart="136dp"
 			app:layout_constraintEnd_toEndOf="parent"
 			android:layout_marginEnd="8dp"
 			app:layout_constraintTop_toTopOf="parent"
@@ -26,6 +28,7 @@
 			android:labelFor="@id/telegramTokenInput"
 			app:layout_constraintEnd_toStartOf="@+id/telegramTokenInput"
 			app:layout_constraintStart_toStartOf="parent"
+			android:layout_marginStart="8dp"
 			app:layout_constraintTop_toTopOf="@+id/telegramTokenInput"
 			app:layout_constraintBottom_toBottomOf="@+id/telegramTokenInput"
 			android:textAppearance="@style/TextAppearance.AppCompat.Body1"/>
@@ -37,20 +40,75 @@
 			android:labelFor="@id/whoToMessageID"
 			app:layout_constraintEnd_toStartOf="@+id/whoToMessageID"
 			app:layout_constraintStart_toStartOf="parent"
+			android:layout_marginStart="8dp"
 			app:layout_constraintTop_toTopOf="@+id/whoToMessageID"
 			app:layout_constraintBottom_toBottomOf="@+id/whoToMessageID"
 			android:textAppearance="@style/TextAppearance.AppCompat.Body1"/>
 
 	<EditText
 			android:id="@+id/whoToMessageID"
-			android:layout_width="wrap_content"
+			android:layout_width="0dp"
 			android:layout_height="wrap_content"
 			android:inputType="numberSigned"
 			android:importantForAutofill="no"
-			android:ems="10"
+			android:singleLine="true"
+			app:layout_constraintStart_toStartOf="parent"
+			android:layout_marginStart="136dp"
 			app:layout_constraintEnd_toEndOf="parent"
 			android:layout_marginEnd="8dp"
 			app:layout_constraintTop_toBottomOf="@+id/telegramTokenInput"
+			android:layout_marginTop="8dp"/>
+
+	<TextView
+			android:layout_width="wrap_content"
+			android:layout_height="wrap_content"
+			android:text="@string/feishu_webhook_text"
+			android:labelFor="@id/feishuWebhookInput"
+			app:layout_constraintStart_toStartOf="parent"
+			android:layout_marginStart="8dp"
+			app:layout_constraintEnd_toStartOf="@id/feishuWebhookInput"
+			app:layout_constraintTop_toTopOf="@id/feishuWebhookInput"
+			app:layout_constraintBottom_toBottomOf="@id/feishuWebhookInput"
+			android:textAppearance="@style/TextAppearance.AppCompat.Body1"/>
+
+	<EditText
+			android:id="@+id/feishuWebhookInput"
+			android:layout_width="0dp"
+			android:layout_height="wrap_content"
+			android:inputType="textUri"
+			android:importantForAutofill="no"
+			android:singleLine="true"
+			app:layout_constraintStart_toStartOf="parent"
+			android:layout_marginStart="136dp"
+			app:layout_constraintEnd_toEndOf="parent"
+			android:layout_marginEnd="8dp"
+			app:layout_constraintTop_toBottomOf="@id/whoToMessageID"
+			android:layout_marginTop="8dp"/>
+
+	<TextView
+			android:layout_width="wrap_content"
+			android:layout_height="wrap_content"
+			android:text="@string/feishu_secret_text"
+			android:labelFor="@id/feishuSecretInput"
+			app:layout_constraintStart_toStartOf="parent"
+			android:layout_marginStart="8dp"
+			app:layout_constraintEnd_toStartOf="@id/feishuSecretInput"
+			app:layout_constraintTop_toTopOf="@id/feishuSecretInput"
+			app:layout_constraintBottom_toBottomOf="@id/feishuSecretInput"
+			android:textAppearance="@style/TextAppearance.AppCompat.Body1"/>
+
+	<EditText
+			android:id="@+id/feishuSecretInput"
+			android:layout_width="0dp"
+			android:layout_height="wrap_content"
+			android:inputType="textPassword"
+			android:importantForAutofill="no"
+			android:singleLine="true"
+			app:layout_constraintStart_toStartOf="parent"
+			android:layout_marginStart="136dp"
+			app:layout_constraintEnd_toEndOf="parent"
+			android:layout_marginEnd="8dp"
+			app:layout_constraintTop_toBottomOf="@id/feishuWebhookInput"
 			android:layout_marginTop="8dp"/>
 
 	<TextView
@@ -61,8 +119,8 @@
 			app:layout_constraintStart_toStartOf="parent"
 			app:layout_constraintEnd_toEndOf="parent"
 			android:textAppearance="@style/TextAppearance.AppCompat.Body2"
-			app:layout_constraintTop_toBottomOf="@+id/whoToMessageID"
-			android:layout_marginTop="32dp"/>
+			app:layout_constraintTop_toBottomOf="@+id/feishuSecretInput"
+			android:layout_marginTop="24dp"/>
 
 	<androidx.recyclerview.widget.RecyclerView
 			android:id="@+id/appListContainer"
@@ -90,6 +148,7 @@
 			app:layout_constraintTop_toBottomOf="@+id/appIgnoreListText"
 			app:layout_constraintStart_toStartOf="parent"
 			android:id="@+id/searchView"
+			android:queryHint="@string/search_app_hint"
 			app:layout_constraintEnd_toStartOf="@+id/sortSpinner"
 			android:layout_marginStart="8dp"
 			app:layout_constraintHorizontal_bias="1.0"

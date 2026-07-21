@@ -82,8 +82,16 @@ class ConfigurationFragment : Fragment() {
 		configurationViewModel.userId.observe(viewLifecycleOwner) {
 			if (binding.whoToMessageID.text.toString() != it) binding.whoToMessageID.setText(it)
 		}
+		configurationViewModel.feishuWebhook.observe(viewLifecycleOwner) {
+			if (binding.feishuWebhookInput.text.toString() != it) binding.feishuWebhookInput.setText(it)
+		}
+		configurationViewModel.feishuSecret.observe(viewLifecycleOwner) {
+			if (binding.feishuSecretInput.text.toString() != it) binding.feishuSecretInput.setText(it)
+		}
 		binding.telegramTokenInput.addTextChangedListener(SimpleTextWatcher { configurationViewModel.saveTelegramToken(it) })
 		binding.whoToMessageID.addTextChangedListener(SimpleTextWatcher { configurationViewModel.saveUserId(it) })
+		binding.feishuWebhookInput.addTextChangedListener(SimpleTextWatcher { configurationViewModel.saveFeishuWebhook(it) })
+		binding.feishuSecretInput.addTextChangedListener(SimpleTextWatcher { configurationViewModel.saveFeishuSecret(it) })
 	}
 
 	private fun loadApps() {
@@ -183,6 +191,10 @@ class AppListAdapter(
 		holder.appPackageName.text = item.packageName
 		holder.appCheckbox.setOnCheckedChangeListener(null)
 		holder.appCheckbox.isChecked = item.isEnabled
+		holder.appCheckbox.contentDescription = holder.itemView.context.getString(
+			R.string.ignore_app_accessibility,
+			item.appName
+		)
 		holder.appCheckbox.setOnCheckedChangeListener { _, isChecked ->
 			item.isEnabled = isChecked
 			onToggleEnabled(item.packageName, isChecked)

@@ -3,8 +3,10 @@ package com.concertonotes.smsforwarder
 import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
 import android.provider.Settings
 import android.text.TextUtils
 import android.widget.Toast
@@ -59,22 +61,23 @@ class MainActivity : AppCompatActivity() {
 
 	override fun onResume() {
 		super.onResume()
+		if (!batteryOptimizationPromptShown && requestBatteryOptimizationIfRequired()) {
+			return
+		}
 		if (!isNotificationServiceEnabled() && !notificationAccessPromptShown) {
 			notificationAccessPromptShown = true
 			showNotificationAccessDialog()
-		} else if (isNotificationServiceEnabled() && !batteryOptimizationPromptShown) {
-			requestBatteryOptimizationIfRequired()
 		}
 	}
 
 	private fun showNotificationAccessDialog() {
 		AlertDialog.Builder(this)
-			.setTitle("Notification Access Required")
-			.setMessage("Enable notification access for Concerto SMS Forwarder to forward app notifications. SMS forwarding can still work without it.")
-			.setPositiveButton("Open Settings") { _, _ ->
+			.setTitle(R.string.notification_access_title)
+			.setMessage(R.string.notification_access_message)
+			.setPositiveButton(R.string.open_settings) { _, _ ->
 				openSettingsSafely(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
 			}
-			.setNegativeButton("Later", null)
+			.setNegativeButton(R.string.later, null)
 			.show()
 	}
 
@@ -82,7 +85,7 @@ class MainActivity : AppCompatActivity() {
 		try {
 			ContextCompat.startForegroundService(this, Intent(this, AllNotificationService::class.java))
 		} catch (exception: Exception) {
-			Toast.makeText(this, "Unable to start the forwarding service on this device.", Toast.LENGTH_LONG).show()
+			Toast.makeText(this, R.string.service_start_failed, Toast.LENGTH_LONG).show()
 		}
 	}
 
@@ -93,7 +96,7 @@ class MainActivity : AppCompatActivity() {
 			try {
 				startActivity(Intent(Settings.ACTION_SETTINGS))
 			} catch (_: Exception) {
-				Toast.makeText(this, "Unable to open system settings on this device.", Toast.LENGTH_LONG).show()
+				Toast.makeText(this, R.string.settings_open_failed, Toast.LENGTH_LONG).show()
 			}
 		}
 	}
@@ -123,17 +126,17 @@ class MainActivity : AppCompatActivity() {
 	}
 
 	private fun showRationaleDialog(permissionsToRequest: Array<String>) {
-		val missingList = permissionsToRequest.joinToString("\n") { "- " + it.substringAfterLast('.') }
+		val missingList = permissionsToRequest.joinToString("\n") { "- " + permissionDisplayName(it) }
 		AlertDialog.Builder(this)
-			.setTitle("Permissions Required")
-			.setMessage("This app needs the following permissions to function properly:\n$missingList")
-			.setPositiveButton("OK") { _, _ ->
+			.setTitle(R.string.permissions_required_title)
+			.setMessage(getString(R.string.permissions_required_message, missingList))
+			.setPositiveButton(R.string.confirm) { _, _ ->
 				// Request permissions after showing rationale
 				ActivityCompat.requestPermissions(this, permissionsToRequest, PERMISSIONS_REQUEST_CODE)
 			}
-			.setNegativeButton("Cancel") { dialog, _ ->
+			.setNegativeButton(R.string.cancel) { dialog, _ ->
 				dialog.dismiss()
-				Toast.makeText(this, "Permissions are required for the app to work properly.", Toast.LENGTH_LONG).show()
+				Toast.makeText(this, R.string.permissions_required_toast, Toast.LENGTH_LONG).show()
 			}
 			.create()
 			.show()
@@ -149,17 +152,17 @@ class MainActivity : AppCompatActivity() {
 				}
 			}
 			if (permissionsToRequest.isNotEmpty()) {
-				val missingList = permissionsToRequest.joinToString("\n") { "- " + it.substringAfterLast('.') }
+				val missingList = permissionsToRequest.joinToString("\n") { "- " + permissionDisplayName(it) }
 				AlertDialog.Builder(this)
-					.setTitle("Permissions Not Granted")
-					.setMessage("The following permissions are still disabled:\n$missingList\n\nYou can enable them from App Settings.")
-					.setPositiveButton("Open Settings") { _, _ ->
+					.setTitle(R.string.permissions_not_granted_title)
+					.setMessage(getString(R.string.permissions_not_granted_message, missingList))
+					.setPositiveButton(R.string.open_settings) { _, _ ->
 						val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-							data = android.net.Uri.fromParts("package", packageName, null)
+							data = Uri.fromParts("package", packageName, null)
 						}
-						startActivity(intent)
+						openSettingsSafely(intent)
 					}
-					.setNegativeButton("Cancel") { dialog, _ -> dialog.dismiss() }
+					.setNegativeButton(R.string.cancel) { dialog, _ -> dialog.dismiss() }
 					.create()
 					.show()
 			}
@@ -181,19 +184,33 @@ class MainActivity : AppCompatActivity() {
 		return colonSplitter.any { it == componentName.flattenToString() }
 	}
 
-	private fun requestBatteryOptimizationIfRequired() {
-		val powerManager = getSystemService(android.os.PowerManager::class.java) ?: return
+	private fun requestBatteryOptimizationIfRequired(): Boolean {
+		val powerManager = getSystemService(PowerManager::class.java) ?: return false
 		batteryOptimizationPromptShown = true
-		if (!powerManager.isIgnoringBatteryOptimizations(packageName)) {
-			AlertDialog.Builder(this)
-				.setTitle("Battery Optimization")
-				.setMessage("To improve background reliability, open battery optimization settings and allow this app to run without optimization.")
-				.setPositiveButton("Open Settings") { _, _ ->
-					openSettingsSafely(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
-				}
-				.setNegativeButton("Cancel", null)
-				.create()
-				.show()
+		if (powerManager.isIgnoringBatteryOptimizations(packageName)) return false
+
+		val directRequest = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+			data = Uri.parse("package:$packageName")
+		}
+		return try {
+			startActivity(directRequest)
+			true
+		} catch (_: Exception) {
+			try {
+				startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+				true
+			} catch (_: Exception) {
+				Toast.makeText(this, R.string.battery_optimization_open_failed, Toast.LENGTH_LONG).show()
+				false
+			}
+		}
+	}
+
+	private fun permissionDisplayName(permission: String): String {
+		return when (permission) {
+			android.Manifest.permission.RECEIVE_SMS -> getString(R.string.permission_receive_sms)
+			android.Manifest.permission.POST_NOTIFICATIONS -> getString(R.string.permission_post_notifications)
+			else -> permission.substringAfterLast('.')
 		}
 	}
 }

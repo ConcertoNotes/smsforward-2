@@ -1,14 +1,44 @@
 <resources>
-    <string name="app_name">Concerto SMS Forwarder</string>
-    <string name="title_dashboard">Notifications</string>
-    <string name="title_configuration">Configuration</string>
+    <string name="app_name">Concerto 短信转发器</string>
+    <string name="title_dashboard">转发记录</string>
+    <string name="title_configuration">转发设置</string>
 
-    <string name="tg_token_text">Telegram bot token</string>
-    <string name="tg_user_id_text">Target user ID</string>
+    <string name="tg_token_text">Telegram 令牌</string>
+    <string name="tg_user_id_text">Telegram 会话 ID</string>
+    <string name="feishu_webhook_text">飞书 Webhook</string>
+    <string name="feishu_secret_text">飞书签名密钥</string>
 
-    <string name="ignore_application_text">Applications to ignore notifications from</string>
-    <string name="enabled_first_search">Ignored first</string>
-    <string name="alphabetical_search">A-Z</string>
-    <string name="alphabetical_reverse">Z-A</string>
+    <string name="ignore_application_text">忽略以下应用的通知</string>
+    <string name="enabled_first_search">已忽略优先</string>
+    <string name="alphabetical_search">名称 A-Z</string>
+    <string name="alphabetical_reverse">名称 Z-A</string>
+    <string name="search_app_hint">搜索应用</string>
+    <string name="ignore_app_accessibility">忽略 %1$s 的通知</string>
 
+    <string name="notification_access_title">需要通知使用权</string>
+    <string name="notification_access_message">请允许 Concerto 短信转发器读取通知，以便转发其他应用的通知。即使不授权，短信转发仍可使用。</string>
+    <string name="open_settings">打开设置</string>
+    <string name="later">稍后</string>
+    <string name="cancel">取消</string>
+    <string name="confirm">确定</string>
+    <string name="service_start_failed">此设备无法启动转发服务。</string>
+    <string name="settings_open_failed">此设备无法打开系统设置。</string>
+    <string name="permissions_required_title">需要权限</string>
+    <string name="permissions_required_message">应用需要以下权限才能正常工作：\n%1$s</string>
+    <string name="permissions_required_toast">必须授予相关权限，应用才能正常工作。</string>
+    <string name="permissions_not_granted_title">权限未授予</string>
+    <string name="permissions_not_granted_message">以下权限仍未启用：\n%1$s\n\n你可以在应用设置中手动启用。</string>
+    <string name="permission_receive_sms">接收短信</string>
+    <string name="permission_post_notifications">发送通知</string>
+    <string name="battery_optimization_open_failed">无法打开电池优化授权页面，请在系统设置中手动允许本应用后台运行。</string>
+
+    <string name="service_channel_name">短信转发服务</string>
+    <string name="service_channel_description">Concerto 短信转发器后台运行状态</string>
+    <string name="rate_limit_channel_name">转发频率限制提醒</string>
+    <string name="rate_limit_channel_description">消息平台接口频率限制提醒</string>
+    <string name="service_notification_title">正在监听短信和通知</string>
+    <string name="service_notification_text">Concerto 短信转发器正在运行</string>
+    <string name="rate_limit_title">消息发送频率受限</string>
+    <string name="rate_limit_text">发送已暂停，预计约 %1$d 分钟后重试。</string>
+    <string name="message_origin">来源：\n%1$s</string>
 </resources>

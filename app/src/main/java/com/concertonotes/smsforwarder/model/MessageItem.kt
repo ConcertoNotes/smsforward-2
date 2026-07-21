@@ -11,5 +11,8 @@ data class MessageItem(
 	var isError: Boolean = false,
 	var retryCount: Int = 0,
 	var nextAttemptAt: Long = 0,
-	var nextChunkIndex: Int = 0
+	var nextChunkIndex: Int = 0,
+	var telegramDelivered: Boolean = false,
+	var feishuDelivered: Boolean = false,
+	var nextFeishuChunkIndex: Int = 0
 ) : Serializable

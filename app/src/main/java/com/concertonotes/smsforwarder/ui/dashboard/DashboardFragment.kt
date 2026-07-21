@@ -96,7 +96,11 @@ class DashboardFragment : Fragment() {
 				messageView.background = ContextCompat.getDrawable(requireContext(), backgroundDrawable)
 
 				messageView.setOnClickListener {
-					Toast.makeText(requireContext(), "Origin:\n${message.packageName}", Toast.LENGTH_LONG).show()
+					Toast.makeText(
+						requireContext(),
+						getString(R.string.message_origin, message.packageName),
+						Toast.LENGTH_LONG
+					).show()
 				}
 
 				messageContainer.addView(messageView)

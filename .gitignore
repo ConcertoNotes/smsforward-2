@@ -35,3 +35,4 @@ google-services.json
 # Other stuff
 .DS_Store
 /.idea/
+/.firecrawl/

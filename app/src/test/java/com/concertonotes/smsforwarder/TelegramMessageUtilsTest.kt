@@ -8,6 +8,30 @@ import org.junit.Test
 
 class TelegramMessageUtilsTest {
 	@Test
+	fun createFeishuSignature_matchesOfficialHmacFormat() {
+		assertEquals(
+			"mbm4Y4oluIPQ00qlBIhX8vAZ0EKv3nw0LuTb91jPL84=",
+			createFeishuSignature(1_700_000_000L, "test-secret")
+		)
+	}
+
+	@Test
+	fun isValidFeishuWebhook_acceptsOnlyOfficialHttpsHookUrls() {
+		assertTrue(isValidFeishuWebhook("https://open.feishu.cn/open-apis/bot/v2/hook/example-id"))
+		assertFalse(isValidFeishuWebhook("http://open.feishu.cn/open-apis/bot/v2/hook/example-id"))
+		assertFalse(isValidFeishuWebhook("https://example.com/open-apis/bot/v2/hook/example-id"))
+		assertFalse(isValidFeishuWebhook("https://open.feishu.cn.evil.example/open-apis/bot/v2/hook/example-id"))
+	}
+
+	@Test
+	fun isFeishuSuccessCode_supportsCurrentAndLegacyResponses() {
+		assertTrue(isFeishuSuccessCode(code = 0, legacyStatusCode = null))
+		assertTrue(isFeishuSuccessCode(code = null, legacyStatusCode = 0))
+		assertFalse(isFeishuSuccessCode(code = 9499, legacyStatusCode = null))
+		assertFalse(isFeishuSuccessCode(code = null, legacyStatusCode = null))
+	}
+
+	@Test
 	fun escapeTelegramHtml_escapesReservedCharacters() {
 		assertEquals(
 			"&lt;tag attr=&quot;x&quot;&gt;A &amp; B&lt;/tag&gt;",

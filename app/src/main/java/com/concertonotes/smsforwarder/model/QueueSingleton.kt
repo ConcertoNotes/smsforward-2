@@ -131,6 +131,9 @@ object QueueSingleton {
 					put("retryCount", item.retryCount)
 					put("nextAttemptAt", item.nextAttemptAt)
 					put("nextChunkIndex", item.nextChunkIndex)
+					put("telegramDelivered", item.telegramDelivered)
+					put("feishuDelivered", item.feishuDelivered)
+					put("nextFeishuChunkIndex", item.nextFeishuChunkIndex)
 				})
 			}
 		}
@@ -152,7 +155,10 @@ object QueueSingleton {
 						isError = item.optBoolean("isError"),
 						retryCount = item.optInt("retryCount"),
 						nextAttemptAt = item.optLong("nextAttemptAt"),
-						nextChunkIndex = item.optInt("nextChunkIndex")
+						nextChunkIndex = item.optInt("nextChunkIndex"),
+						telegramDelivered = item.optBoolean("telegramDelivered"),
+						feishuDelivered = item.optBoolean("feishuDelivered"),
+						nextFeishuChunkIndex = item.optInt("nextFeishuChunkIndex")
 					)
 				)
 			}

@@ -2,13 +2,13 @@
 
 [![Build Android APK](https://github.com/ConcertoNotes/smsforward-2/actions/workflows/android_build.yml/badge.svg)](https://github.com/ConcertoNotes/smsforward-2/actions/workflows/android_build.yml)
 
-由 [ConcertoNotes](https://github.com/ConcertoNotes) 维护的 Android 短信与通知转发工具，可通过用户自己的 Telegram Bot 将设备收到的短信和应用通知转发到指定聊天。
+由 [ConcertoNotes](https://github.com/ConcertoNotes) 维护的 Android 短信与通知转发工具，可通过用户自己的 Telegram Bot、飞书群自定义机器人或两个通道同时转发设备收到的短信和应用通知。
 
 ## 二次开发说明
 
 本项目基于 [Spirit532/SMSForwarder](https://github.com/Spirit532/SMSForwarder) 进行二次开发，当前仓库不是原项目的官方版本。
 
-二次开发版本保留 GPL-3.0 许可证，并在原有功能基础上重点改进了消息可靠性、Android 后台生命周期、权限安全、Telegram 发送容错、自动化测试和 APK 构建流程。
+二次开发版本保留 GPL-3.0 许可证，并在原有功能基础上重点改进了消息可靠性、Android 后台生命周期、权限安全、Telegram/飞书发送容错、自动化测试和 APK 构建流程。
 
 当前项目身份：
 
@@ -24,6 +24,8 @@
 - 按应用配置通知忽略列表。
 - 将待发消息持久化，进程退出或设备重启后继续发送。
 - 自动拆分 Telegram 超长消息，并记录分段发送进度。
+- 支持飞书群自定义机器人 Webhook 和可选签名校验。
+- Telegram 与飞书分别记录投递进度，一个通道失败不会导致另一个通道重复发送。
 - 对网络错误执行指数退避，对 Telegram `429` 使用服务端返回的等待时间。
 - 自动过滤空通知和重复通知字段。
 - 最多保留 200 条本地发送历史。
@@ -50,10 +52,11 @@
 1. 在备用 Android 手机上安装 APK。
 2. 授予短信、通知和前台服务所需权限。
 3. 在系统设置中启用本应用的“通知使用权”。
-4. 根据需要在电池优化设置中允许应用持续后台运行。
-5. 通过 Telegram [BotFather](https://t.me/botfather) 创建自己的 Bot。
-6. 在配置页填写 Bot Token 和目标 Chat ID。
-7. 在应用列表中勾选需要忽略通知的应用。
+4. 首次启动时允许应用不受电池优化限制，以提高后台转发可靠性。
+5. 如需 Telegram，通过 [BotFather](https://t.me/botfather) 创建 Bot，并填写 Bot Token 和目标 Chat ID。
+6. 如需飞书，在群聊中添加自定义机器人，并填写机器人 Webhook；启用签名校验时还需填写签名密钥。
+7. 两种通道可以单独使用，也可以同时填写并并行转发。
+8. 在应用列表中勾选需要忽略通知的应用。
 
 群组或频道 Chat ID 通常为负数，当前版本支持填写负数 ID。
 
@@ -63,11 +66,12 @@
 - 合并 multipart SMS，避免长短信只转发第一段。
 - 更严格的消息去重规则，保留合法的重复验证码或通知。
 - Telegram HTML 转义、Unicode 安全分段和断点续传。
+- 飞书官方 Webhook 域名校验、可选 HMAC-SHA256 签名和独立断点续传。
 - 区分网络错误、配置错误、限流和永久失败，避免单条坏消息永久堵塞队列。
 - 使用短时 WakeLock，移除永久 CPU/Wi-Fi Lock。
 - 前台服务使用 `START_STICKY`，通知监听器支持自动重新绑定。
 - 核心服务不再导出给其他应用。
-- 删除不必要的 `READ_SMS` 和直接忽略电池优化权限。
+- 删除不必要的 `READ_SMS`，首次启动时直接请求电池优化豁免以提高后台可靠性。
 - Token、配置和待发消息排除云备份及设备迁移。
 - 移除可能包含短信正文的 Telegram API 响应日志。
 - 修复配置页生命周期、搜索竞态和 RecyclerView 全量刷新问题。
@@ -97,10 +101,10 @@ app/build/outputs/apk/debug/app-debug.apk
 
 ## 安全说明
 
-- Telegram Bot 消息不具备端到端加密，不应将其视为机密通信渠道。
+- Telegram Bot 和飞书机器人消息不具备端到端加密，不应将其视为机密通信渠道。
 - 应用需要读取短信和通知，这是核心功能所必需的高敏感权限。
-- Bot Token 和待发消息保存在 Android 应用私有目录，并已排除系统备份，但当前尚未使用 Android Keystore 加密。
-- 不要安装来源不明的 APK，也不要将 Bot Token 提交到 Git 仓库、Issue 或日志。
+- Bot Token、飞书 Webhook/签名密钥和待发消息保存在 Android 应用私有目录，并已排除系统备份，但当前尚未使用 Android Keystore 加密。
+- 不要安装来源不明的 APK，也不要将 Bot Token、飞书 Webhook 或签名密钥提交到 Git 仓库、Issue 或日志。
 - 建议限制 Bot 权限，并仅向受控制的个人聊天、群组或频道转发消息。
 
 ## 许可证与上游归属

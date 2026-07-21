@@ -21,6 +21,16 @@ class ConfigurationViewModel(application: Application) : AndroidViewModel(applic
     }
     val userId: LiveData<String> = _userId
 
+    private val _feishuWebhook = MutableLiveData<String>().apply {
+        value = sharedPreferences.getString("feishu_webhook", "")
+    }
+    val feishuWebhook: LiveData<String> = _feishuWebhook
+
+    private val _feishuSecret = MutableLiveData<String>().apply {
+        value = sharedPreferences.getString("feishu_secret", "")
+    }
+    val feishuSecret: LiveData<String> = _feishuSecret
+
     fun saveTelegramToken(token: String) {
         _telegramToken.value = token
         sharedPreferences.edit().putString("telegram_token", token).apply()
@@ -29,6 +39,16 @@ class ConfigurationViewModel(application: Application) : AndroidViewModel(applic
     fun saveUserId(id: String) {
         _userId.value = id
         sharedPreferences.edit().putString("telegram_user_id", id).apply()
+    }
+
+    fun saveFeishuWebhook(webhook: String) {
+        _feishuWebhook.value = webhook
+        sharedPreferences.edit().putString("feishu_webhook", webhook.trim()).apply()
+    }
+
+    fun saveFeishuSecret(secret: String) {
+        _feishuSecret.value = secret
+        sharedPreferences.edit().putString("feishu_secret", secret.trim()).apply()
     }
 
     fun getAppEnabled(packageName: String): Boolean {
