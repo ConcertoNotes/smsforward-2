@@ -32,7 +32,9 @@ class SmsReceiver : BroadcastReceiver() {
 				timestamp = messages.minOf { it.timestampMillis }
 			)
 
-			if (QueueSingleton.enqueue(context, msg)) {
+			// Separate SMS broadcasts can legitimately have identical content and
+			// second-level timestamps, so only deduplicate notification updates.
+			if (QueueSingleton.enqueue(context, msg, deduplicate = false)) {
 				QueueSingleton.wakeUp(context)
 			}
 		}

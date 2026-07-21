@@ -36,7 +36,7 @@ class NotificationListener : NotificationListenerService() {
 		val packageName = sbn.packageName
 		if (packageName != applicationContext.packageName &&
 			packageName !in EXCLUDED_PACKAGES &&
-			!getSharedPreferences(APP_PREFERENCES_NAME, 0).getBoolean("${packageName}_ignore_enabled", false)
+			!getSharedPreferences(APP_PREFERENCES_NAME, 0).getBoolean("${packageName}_ignore_enabled", true)
 		) {
 			val notification = sbn.notification
 			val extras = notification.extras

@@ -133,15 +133,14 @@ class AllNotificationService : Service() {
 		const val HTTP_TOO_MANY_REQUESTS = 429
 		const val MAX_MESSAGE_AGE_MS = 14L * 24 * 60 * 60 * 1000
 		const val IDLE_POLL_INTERVAL_MS = 1_000L
-		const val BUSY_POLL_INTERVAL_MS = 500L
 		const val CONFIG_RETRY_DELAY_MS = 60_000L
+		const val MAX_CONCURRENT_MESSAGES = 3
 	}
 
 	private val handler = Handler(Looper.getMainLooper())
-	private val executorService = Executors.newSingleThreadExecutor()
-	private val channelExecutor = Executors.newFixedThreadPool(2)
-	@Volatile
-	private var isProcessingMessage = false
+	private val executorService = Executors.newFixedThreadPool(MAX_CONCURRENT_MESSAGES)
+	private val channelExecutor = Executors.newFixedThreadPool(MAX_CONCURRENT_MESSAGES * 2)
+	private val inFlightMessages = mutableListOf<MessageItem>()
 	@Volatile
 	private var destroyed = false
 	@Volatile
@@ -156,7 +155,6 @@ class AllNotificationService : Service() {
 	private sealed class SendResult {
 		object Success : SendResult()
 		data class Retry(val delayMs: Long, val responseCode: Int) : SendResult()
-		data class PermanentFailure(val responseCode: Int) : SendResult()
 	}
 
 	private data class HttpResponse(val code: Int, val body: String)
@@ -168,32 +166,48 @@ class AllNotificationService : Service() {
 			QueueSingleton.discardPendingOlderThan(System.currentTimeMillis() - MAX_MESSAGE_AGE_MS)
 
 			val now = System.currentTimeMillis()
-			val message = selectNextReadyMessage(QueueSingleton.messageQueue, now)
-			if (message == null) {
-				QueueSingleton.releaseWakeLock()
-				val nextAttemptAt = QueueSingleton.messageQueue
-					.map { it.nextAttemptAt }
-					.filter { it > now }
-					.minOrNull()
-				val delay = nextAttemptAt?.let { min(it - now, IDLE_POLL_INTERVAL_MS) } ?: IDLE_POLL_INTERVAL_MS
-				scheduleNext(delay)
-				return
-			}
-
-			if (isProcessingMessage) {
-				scheduleNext(BUSY_POLL_INTERVAL_MS)
-				return
-			}
-
-			isProcessingMessage = true
-			QueueSingleton.wakeUp(this@AllNotificationService)
-			executorService.execute {
-				val result = sendMessage(message)
-				handler.post {
-					handleSendResult(message, result)
-					isProcessingMessage = false
-					if (!destroyed) scheduleNext(0)
+			while (inFlightMessages.size < MAX_CONCURRENT_MESSAGES) {
+				val message = selectNextReadyMessage(QueueSingleton.messageQueue, now, inFlightMessages) ?: break
+				inFlightMessages.add(message)
+				QueueSingleton.wakeUp(this@AllNotificationService)
+				try {
+					executorService.execute { sendMessageInBackground(message) }
+				} catch (exception: Exception) {
+					inFlightMessages.removeAll { it === message }
+					Log.e("ConcertoForwarder", "Unable to schedule message", exception)
+					break
 				}
+			}
+
+			if (inFlightMessages.isNotEmpty()) return
+
+			QueueSingleton.releaseWakeLock()
+			val nextAttemptAt = QueueSingleton.messageQueue
+				.map { it.nextAttemptAt }
+				.filter { it > now }
+				.minOrNull()
+			val delay = nextAttemptAt?.let { min(it - now, IDLE_POLL_INTERVAL_MS) } ?: IDLE_POLL_INTERVAL_MS
+			scheduleNext(delay)
+		}
+	}
+
+	private fun sendMessageInBackground(message: MessageItem) {
+		val result = try {
+			sendMessage(message)
+		} catch (exception: Exception) {
+			Log.e("ConcertoForwarder", "Unexpected failure while sending message", exception)
+			SendResult.Retry(calculateRetryBackoff(message.retryCount), -1)
+		}
+
+		handler.post {
+			inFlightMessages.removeAll { it === message }
+			if (destroyed) return@post
+			try {
+				handleSendResult(message, result)
+			} catch (exception: Exception) {
+				Log.e("ConcertoForwarder", "Unable to finalize message result", exception)
+			} finally {
+				scheduleNext(0)
 			}
 		}
 	}
@@ -250,19 +264,14 @@ class AllNotificationService : Service() {
 				QueueSingleton.completePending(message)
 			}
 			is SendResult.Retry -> {
-				message.isError = true
+				// A retry is still pending work, not a final forwarding failure.
+				message.isError = false
 				message.retryCount += 1
 				message.nextAttemptAt = System.currentTimeMillis() + result.delayMs
 				QueueSingleton.updatePending(message)
 				if (result.responseCode == HTTP_TOO_MANY_REQUESTS) {
 					showRateLimitNotification(result.delayMs)
 				}
-			}
-			is SendResult.PermanentFailure -> {
-				message.isSent = false
-				message.isError = true
-				message.nextAttemptAt = 0
-				QueueSingleton.completePending(message)
 			}
 		}
 		broadcastMessage(message)
@@ -328,11 +337,7 @@ class AllNotificationService : Service() {
 		if (current is SendResult.Retry && next is SendResult.Retry) {
 			return if (current.delayMs >= next.delayMs) current else next
 		}
-		return when {
-			current is SendResult.Retry -> current
-			next is SendResult.Retry -> next
-			else -> current
-		}
+		return current
 	}
 
 	private fun sendTelegramMessage(message: MessageItem, telegramToken: String, telegramUserId: String): SendResult {
@@ -368,7 +373,10 @@ class AllNotificationService : Service() {
 				response.code == HttpURLConnection.HTTP_CLIENT_TIMEOUT || response.code >= 500 || response.code == -1 -> {
 					return SendResult.Retry(calculateRetryBackoff(message.retryCount), response.code)
 				}
-				else -> return SendResult.PermanentFailure(response.code)
+				else -> {
+					Log.w("ConcertoForwarder", "Telegram send failed with HTTP ${response.code}; will retry")
+					return SendResult.Retry(CONFIG_RETRY_DELAY_MS, response.code)
+				}
 			}
 		}
 		return SendResult.Success
@@ -397,7 +405,10 @@ class AllNotificationService : Service() {
 				response.code == -1 || response.code >= 500 -> {
 					return SendResult.Retry(calculateRetryBackoff(message.retryCount), response.code)
 				}
-				else -> return SendResult.Retry(CONFIG_RETRY_DELAY_MS, response.code)
+				else -> {
+					Log.w("ConcertoForwarder", "Feishu send failed with HTTP ${response.code}; will retry")
+					return SendResult.Retry(CONFIG_RETRY_DELAY_MS, response.code)
+				}
 			}
 		}
 		return SendResult.Success

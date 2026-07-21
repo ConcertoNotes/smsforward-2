@@ -11,11 +11,16 @@ import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
+import androidx.appcompat.app.AlertDialog
 import androidx.core.content.ContextCompat
+import androidx.core.view.MenuHost
+import androidx.core.view.MenuProvider
 import androidx.fragment.app.Fragment
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ViewModelProvider
 import com.concertonotes.smsforwarder.R
 import com.concertonotes.smsforwarder.databinding.FragmentDashboardBinding
@@ -24,7 +29,33 @@ import com.concertonotes.smsforwarder.model.QueueSingleton
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
-import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.Locale
+import java.util.TimeZone
+
+internal fun formatMessageTimestamp(timestamp: Long, zoneId: ZoneId): String {
+	return DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+		.withZone(zoneId)
+		.format(Instant.ofEpochMilli(timestamp))
+}
+
+internal enum class MessageDisplayStatus {
+	PENDING,
+	RETRYING,
+	PARTIALLY_SENT,
+	SUCCESS,
+	FAILED
+}
+
+internal fun resolveMessageDisplayStatus(message: MessageItem, isPending: Boolean): MessageDisplayStatus {
+	return when {
+		message.isSent -> MessageDisplayStatus.SUCCESS
+		isPending && (message.telegramDelivered || message.feishuDelivered) -> MessageDisplayStatus.PARTIALLY_SENT
+		isPending && message.retryCount > 0 -> MessageDisplayStatus.RETRYING
+		isPending -> MessageDisplayStatus.PENDING
+		message.isError -> MessageDisplayStatus.FAILED
+		else -> MessageDisplayStatus.PENDING
+	}
+}
 
 class DashboardFragment : Fragment() {
 
@@ -53,6 +84,27 @@ class DashboardFragment : Fragment() {
 		return root
 	}
 
+	override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
+		super.onViewCreated(view, savedInstanceState)
+		val menuHost: MenuHost = requireActivity()
+		menuHost.addMenuProvider(object : MenuProvider {
+			override fun onCreateMenu(menu: android.view.Menu, menuInflater: android.view.MenuInflater) {
+				menuInflater.inflate(R.menu.dashboard_actions, menu)
+			}
+
+			override fun onPrepareMenu(menu: android.view.Menu) {
+				menu.findItem(R.id.action_clear_records)?.isVisible =
+					QueueSingleton.messageQueue.isNotEmpty() || QueueSingleton.messageHistory.isNotEmpty()
+			}
+
+			override fun onMenuItemSelected(menuItem: android.view.MenuItem): Boolean {
+				if (menuItem.itemId != R.id.action_clear_records) return false
+				confirmClearRecords()
+				return true
+			}
+		}, viewLifecycleOwner, Lifecycle.State.RESUMED)
+	}
+
 	@SuppressLint("UnspecifiedRegisterReceiverFlag")
 	override fun onResume() {
 		super.onResume()
@@ -77,22 +129,31 @@ class DashboardFragment : Fragment() {
 
 	private fun displayMessages() {
 		messageContainer.removeAllViews()
+		val messages = (QueueSingleton.messageQueue.toList() + QueueSingleton.messageHistory.toList())
+			.sortedByDescending { it.timestamp }
+		binding.emptyMessage.visibility = if (messages.isEmpty()) View.VISIBLE else View.GONE
+		requireActivity().invalidateOptionsMenu()
+		val zoneId = TimeZone.getDefault().toZoneId()
 
-		fun addMessagesInReverse(messages: ConcurrentLinkedQueue<MessageItem>) {
-			val messagesList = messages.toList()
-			for (message in messagesList.asReversed()) {
+		for (message in messages) {
 				val messageView = layoutInflater.inflate(R.layout.item_message, messageContainer, false)
 				messageView.findViewById<TextView>(R.id.messageContent).text = message.content
 				messageView.findViewById<TextView>(R.id.messageSender).text = message.sender
-				messageView.findViewById<TextView>(R.id.messageTimestamp).text =
-					DateTimeFormatter.ofPattern("dd/MM/yy HH:mm:ss").withZone(ZoneId.systemDefault()).format(Instant.ofEpochMilli(message.timestamp))
+				messageView.findViewById<TextView>(R.id.messageTimestamp).text = getString(
+					R.string.message_time_with_zone,
+					formatMessageTimestamp(message.timestamp, zoneId),
+					zoneId.id
+				)
 
-				val backgroundDrawable = when {
-					message.isSent -> R.drawable.rounded_background_sent
-					message.isError -> R.drawable.rounded_background_error
-					else -> R.drawable.rounded_background
+				val isPending = QueueSingleton.messageQueue.any { it === message }
+				val (statusText, backgroundDrawable) = when (resolveMessageDisplayStatus(message, isPending)) {
+					MessageDisplayStatus.SUCCESS -> R.string.message_status_success to R.drawable.rounded_background_sent
+					MessageDisplayStatus.PARTIALLY_SENT -> R.string.message_status_partially_sent to R.drawable.rounded_background_sent
+					MessageDisplayStatus.RETRYING -> R.string.message_status_retrying to R.drawable.rounded_background
+					MessageDisplayStatus.FAILED -> R.string.message_status_failed to R.drawable.rounded_background_error
+					MessageDisplayStatus.PENDING -> R.string.message_status_pending to R.drawable.rounded_background
 				}
-
+				messageView.findViewById<TextView>(R.id.messageStatus).setText(statusText)
 				messageView.background = ContextCompat.getDrawable(requireContext(), backgroundDrawable)
 
 				messageView.setOnClickListener {
@@ -102,13 +163,37 @@ class DashboardFragment : Fragment() {
 						Toast.LENGTH_LONG
 					).show()
 				}
+				messageView.findViewById<ImageButton>(R.id.deleteMessageButton).setOnClickListener {
+					confirmDeleteMessage(message)
+				}
 
 				messageContainer.addView(messageView)
-			}
 		}
+	}
 
-		addMessagesInReverse(QueueSingleton.messageQueue)
-		addMessagesInReverse(QueueSingleton.messageHistory)
+	private fun confirmDeleteMessage(message: MessageItem) {
+		val isPending = QueueSingleton.messageQueue.any { it === message }
+		AlertDialog.Builder(requireContext())
+			.setTitle(R.string.delete_message_title)
+			.setMessage(if (isPending) R.string.delete_pending_message_warning else R.string.delete_completed_message_warning)
+			.setNegativeButton(R.string.cancel, null)
+			.setPositiveButton(R.string.delete_message) { _, _ ->
+				QueueSingleton.deleteMessage(message)
+				displayMessages()
+			}
+			.show()
+	}
+
+	private fun confirmClearRecords() {
+		AlertDialog.Builder(requireContext())
+			.setTitle(R.string.clear_records_title)
+			.setMessage(R.string.clear_records_warning)
+			.setNegativeButton(R.string.cancel, null)
+			.setPositiveButton(R.string.clear_forwarding_records) { _, _ ->
+				QueueSingleton.clearMessages()
+				displayMessages()
+			}
+			.show()
 	}
 
 }

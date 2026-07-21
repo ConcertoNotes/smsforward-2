@@ -26,5 +26,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "ConcertoSMSForwarder"
+rootProject.name = "XinJieForwarder"
 include(":app")

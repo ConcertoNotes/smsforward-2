@@ -50,4 +50,21 @@ class MessageQueueLogicTest {
 
 		assertEquals(fresh, selectNextReadyMessage(listOf(retry, fresh), now))
 	}
+
+	@Test
+	fun selectNextReadyMessage_skipsMessagesAlreadyInFlight() {
+		val now = 1_700_000_100_000L
+		val first = original.copy()
+		val second = original.copy(timestamp = original.timestamp + 1_000L)
+
+		assertEquals(second, selectNextReadyMessage(listOf(first, second), now, listOf(first)))
+	}
+
+	@Test
+	fun selectNextReadyMessage_excludesByIdentityNotValue() {
+		val now = 1_700_000_100_000L
+		val equalButDistinct = original.copy()
+
+		assertEquals(equalButDistinct, selectNextReadyMessage(listOf(equalButDistinct), now, listOf(original)))
+	}
 }

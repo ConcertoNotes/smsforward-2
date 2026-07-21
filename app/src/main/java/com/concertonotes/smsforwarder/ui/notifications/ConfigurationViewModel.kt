@@ -62,7 +62,7 @@ class ConfigurationViewModel(application: Application) : AndroidViewModel(applic
     }
 
     fun getAppEnabled(packageName: String): Boolean {
-        return sharedPreferences.getBoolean("${packageName}_ignore_enabled", false)
+        return sharedPreferences.getBoolean("${packageName}_ignore_enabled", true)
     }
 
     fun setAppEnabled(packageName: String, enabled: Boolean) {

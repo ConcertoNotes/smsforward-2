@@ -16,14 +16,20 @@ internal fun isSamePendingMessage(first: MessageItem, second: MessageItem): Bool
 		first.packageName == second.packageName
 }
 
-internal fun selectNextReadyMessage(messages: Iterable<MessageItem>, now: Long): MessageItem? {
+internal fun selectNextReadyMessage(
+	messages: Iterable<MessageItem>,
+	now: Long,
+	excludedMessages: Collection<MessageItem> = emptyList()
+): MessageItem? {
 	return messages.asSequence()
+		.filter { candidate -> excludedMessages.none { it === candidate } }
 		.filter { it.nextAttemptAt <= now }
 		.minWithOrNull(compareBy<MessageItem> { it.retryCount }.thenBy { it.timestamp })
 }
 
 object QueueSingleton {
 	private const val PENDING_MESSAGES_KEY = "pending_messages"
+	private const val MESSAGE_HISTORY_KEY = "message_history"
 	private const val MAX_HISTORY_SIZE = 200
 	private const val WAKE_LOCK_TIMEOUT_MS = 60_000L
 
@@ -54,6 +60,8 @@ object QueueSingleton {
 			applicationContext = context.applicationContext
 			val preferences = applicationContext.getSharedPreferences(APP_PREFERENCES_NAME, Context.MODE_PRIVATE)
 			restoreQueue(preferences.getString(PENDING_MESSAGES_KEY, null), messageQueue)
+			restoreQueue(preferences.getString(MESSAGE_HISTORY_KEY, null), messageHistory)
+			trimHistory()
 
 			wakeLock = try {
 				applicationContext.getSystemService(PowerManager::class.java)?.newWakeLock(
@@ -72,10 +80,10 @@ object QueueSingleton {
 		return messageQueue.any { isSamePendingMessage(it, item) }
 	}
 
-	fun enqueue(context: Context, item: MessageItem): Boolean {
+	fun enqueue(context: Context, item: MessageItem, deduplicate: Boolean = true): Boolean {
 		initialize(context)
 		val added = synchronized(stateLock) {
-			if (containsMessage(item)) return@synchronized false
+			if (deduplicate && containsMessage(item)) return@synchronized false
 			messageQueue.add(item)
 			persistLocked()
 			true
@@ -100,11 +108,32 @@ object QueueSingleton {
 
 	fun completePending(item: MessageItem) {
 		synchronized(stateLock) {
-			if (messageQueue.peek() == item) messageQueue.poll() else messageQueue.remove(item)
+			if (messageQueue.none { it === item }) return
+			messageQueue.removeIf { it === item }
 			messageHistory.add(item)
 			trimHistory()
 			persistLocked()
 		}
+	}
+
+	fun deleteMessage(item: MessageItem): Boolean {
+		val deleted = synchronized(stateLock) {
+			val removedPending = messageQueue.removeIf { it === item }
+			val removedFromHistory = messageHistory.removeIf { it === item }
+			if (removedPending || removedFromHistory) persistLocked()
+			removedPending || removedFromHistory
+		}
+		if (deleted) queueChangedListener?.invoke()
+		return deleted
+	}
+
+	fun clearMessages() {
+		synchronized(stateLock) {
+			messageQueue.clear()
+			messageHistory.clear()
+			persistLocked()
+		}
+		queueChangedListener?.invoke()
 	}
 
 	fun discardPendingOlderThan(cutoffTimestamp: Long) {
@@ -137,6 +166,7 @@ object QueueSingleton {
 		applicationContext.getSharedPreferences(APP_PREFERENCES_NAME, Context.MODE_PRIVATE)
 			.edit()
 			.putString(PENDING_MESSAGES_KEY, queueToJson(messageQueue).toString())
+			.putString(MESSAGE_HISTORY_KEY, queueToJson(messageHistory).toString())
 			.commit()
 	}
 
