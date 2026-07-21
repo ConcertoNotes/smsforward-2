@@ -24,6 +24,7 @@ class MainActivity : AppCompatActivity() {
 	private lateinit var binding: ActivityMainBinding
 	private val PERMISSIONS_REQUEST_CODE = 1
 	private var batteryOptimizationPromptShown = false
+	private var notificationAccessPromptShown = false
 
 	private val permissions = mutableListOf<String>().apply {
 		add(android.Manifest.permission.RECEIVE_SMS)
@@ -39,17 +40,6 @@ class MainActivity : AppCompatActivity() {
 		binding = ActivityMainBinding.inflate(layoutInflater)
 		setContentView(binding.root)
 
-		if (!isNotificationServiceEnabled()) {
-			// Prompt user to enable notification access
-			val intent = Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
-			startActivity(intent)
-			Toast.makeText(this,
-				"Please enable notification access for this app. It must be done manually.",
-				Toast.LENGTH_LONG).show()
-		}
-
-		requestPermissions()
-
 		val navView: BottomNavigationView = binding.navView
 
 		val navController = findNavController(R.id.nav_host_fragment_activity_main)
@@ -61,14 +51,48 @@ class MainActivity : AppCompatActivity() {
 		setupActionBarWithNavController(navController, appBarConfiguration)
 		navView.setupWithNavController(navController)
 
-		// Start background service
-		androidx.core.content.ContextCompat.startForegroundService(this, Intent(this, AllNotificationService::class.java))
+		requestPermissions()
+		startForwardingServiceSafely()
 	}
 
 	override fun onResume() {
 		super.onResume()
-		if (isNotificationServiceEnabled() && !batteryOptimizationPromptShown) {
+		if (!isNotificationServiceEnabled() && !notificationAccessPromptShown) {
+			notificationAccessPromptShown = true
+			showNotificationAccessDialog()
+		} else if (isNotificationServiceEnabled() && !batteryOptimizationPromptShown) {
 			requestBatteryOptimizationIfRequired()
+		}
+	}
+
+	private fun showNotificationAccessDialog() {
+		AlertDialog.Builder(this)
+			.setTitle("Notification Access Required")
+			.setMessage("Enable notification access for Concerto SMS Forwarder to forward app notifications. SMS forwarding can still work without it.")
+			.setPositiveButton("Open Settings") { _, _ ->
+				openSettingsSafely(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+			}
+			.setNegativeButton("Later", null)
+			.show()
+	}
+
+	private fun startForwardingServiceSafely() {
+		try {
+			ContextCompat.startForegroundService(this, Intent(this, AllNotificationService::class.java))
+		} catch (exception: Exception) {
+			Toast.makeText(this, "Unable to start the forwarding service on this device.", Toast.LENGTH_LONG).show()
+		}
+	}
+
+	private fun openSettingsSafely(intent: Intent) {
+		try {
+			startActivity(intent)
+		} catch (exception: Exception) {
+			try {
+				startActivity(Intent(Settings.ACTION_SETTINGS))
+			} catch (_: Exception) {
+				Toast.makeText(this, "Unable to open system settings on this device.", Toast.LENGTH_LONG).show()
+			}
 		}
 	}
 
@@ -118,7 +142,7 @@ class MainActivity : AppCompatActivity() {
 		if (requestCode == PERMISSIONS_REQUEST_CODE) {
 			val permissionsToRequest = mutableListOf<String>()
 			for ((index, permission) in permissions.withIndex()) {
-				if (grantResults[index] != PackageManager.PERMISSION_GRANTED) {
+				if (grantResults.getOrNull(index) != PackageManager.PERMISSION_GRANTED) {
 					permissionsToRequest.add(permission)
 				}
 			}
@@ -141,7 +165,11 @@ class MainActivity : AppCompatActivity() {
 	}
 
 	private fun isNotificationServiceEnabled(): Boolean {
-		val enabledListeners = Settings.Secure.getString(contentResolver, "enabled_notification_listeners")
+		val enabledListeners = try {
+			Settings.Secure.getString(contentResolver, "enabled_notification_listeners")
+		} catch (_: Exception) {
+			null
+		}
 		if (enabledListeners.isNullOrEmpty()) {
 			return false
 		}
@@ -152,14 +180,14 @@ class MainActivity : AppCompatActivity() {
 	}
 
 	private fun requestBatteryOptimizationIfRequired() {
-		val powerManager = getSystemService(android.content.Context.POWER_SERVICE) as android.os.PowerManager
+		val powerManager = getSystemService(android.os.PowerManager::class.java) ?: return
 		batteryOptimizationPromptShown = true
 		if (!powerManager.isIgnoringBatteryOptimizations(packageName)) {
 			AlertDialog.Builder(this)
 				.setTitle("Battery Optimization")
 				.setMessage("To improve background reliability, open battery optimization settings and allow this app to run without optimization.")
 				.setPositiveButton("Open Settings") { _, _ ->
-					startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+					openSettingsSafely(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
 				}
 				.setNegativeButton("Cancel", null)
 				.create()

@@ -43,11 +43,15 @@ object QueueSingleton {
 			val preferences = applicationContext.getSharedPreferences(APP_PREFERENCES_NAME, Context.MODE_PRIVATE)
 			restoreQueue(preferences.getString(PENDING_MESSAGES_KEY, null), messageQueue)
 
-			val powerManager = applicationContext.getSystemService(Context.POWER_SERVICE) as PowerManager
-			wakeLock = powerManager.newWakeLock(
-				PowerManager.PARTIAL_WAKE_LOCK,
-				"ConcertoSMSForwarder::MessageProcessing"
-			).apply { setReferenceCounted(false) }
+			wakeLock = try {
+				applicationContext.getSystemService(PowerManager::class.java)?.newWakeLock(
+					PowerManager.PARTIAL_WAKE_LOCK,
+					"ConcertoSMSForwarder::MessageProcessing"
+				)?.apply { setReferenceCounted(false) }
+			} catch (exception: Exception) {
+				exception.printStackTrace()
+				null
+			}
 			initialized = true
 		}
 	}

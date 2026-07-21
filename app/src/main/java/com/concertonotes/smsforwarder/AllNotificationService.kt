@@ -11,6 +11,7 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.service.notification.NotificationListenerService
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.concertonotes.smsforwarder.model.APP_PREFERENCES_NAME
 import com.concertonotes.smsforwarder.model.MessageItem
@@ -96,6 +97,8 @@ class AllNotificationService : Service() {
 	private var isProcessingMessage = false
 	@Volatile
 	private var destroyed = false
+	@Volatile
+	private var startupFailed = false
 	private var lastHealthCheckTime = System.currentTimeMillis()
 
 	private sealed class SendResult {
@@ -145,15 +148,29 @@ class AllNotificationService : Service() {
 
 	override fun onCreate() {
 		super.onCreate()
-		createNotificationChannels()
-		startForeground(SERVICE_NOTIFICATION_ID, createNotification())
-		QueueSingleton.initialize(this)
-		handler.post(processRunnable)
+		try {
+			createNotificationChannels()
+			startForeground(SERVICE_NOTIFICATION_ID, createNotification())
+			QueueSingleton.initialize(this)
+			handler.post(processRunnable)
+		} catch (exception: Exception) {
+			startupFailed = true
+			Log.e("ConcertoForwarder", "Unable to initialize foreground service", exception)
+			stopSelf()
+		}
 	}
 
 	override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-		startForeground(SERVICE_NOTIFICATION_ID, createNotification())
-		return START_STICKY
+		if (startupFailed) return START_NOT_STICKY
+		return try {
+			startForeground(SERVICE_NOTIFICATION_ID, createNotification())
+			START_STICKY
+		} catch (exception: Exception) {
+			startupFailed = true
+			Log.e("ConcertoForwarder", "Unable to keep foreground service running", exception)
+			stopSelf(startId)
+			START_NOT_STICKY
+		}
 	}
 
 	override fun onDestroy() {
