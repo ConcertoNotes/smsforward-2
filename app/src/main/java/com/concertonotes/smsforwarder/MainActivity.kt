@@ -1,7 +1,12 @@
 package com.concertonotes.smsforwarder
 
+import android.app.DownloadManager
+import android.app.NotificationManager
+import android.content.BroadcastReceiver
 import android.content.ComponentName
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
@@ -14,6 +19,7 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import com.google.android.material.bottomnavigation.BottomNavigationView
 import androidx.navigation.fragment.NavHostFragment
 import androidx.navigation.ui.AppBarConfiguration
@@ -27,6 +33,18 @@ class MainActivity : AppCompatActivity() {
 	private val PERMISSIONS_REQUEST_CODE = 1
 	private var batteryOptimizationPromptShown = false
 	private var notificationAccessPromptShown = false
+	private var updateCheckStarted = false
+	private var updateDialogVersion: String? = null
+	private var installPromptVersion: String? = null
+	private var updateReceiverRegistered = false
+	private val updateDownloadReceiver = object : BroadcastReceiver() {
+		override fun onReceive(context: Context?, intent: Intent?) {
+			if (intent?.action != DownloadManager.ACTION_DOWNLOAD_COMPLETE) return
+			val completedId = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1L)
+			val pending = AppUpdateManager.pendingDownload(this@MainActivity) ?: return
+			if (pending.id == completedId) handlePendingUpdateDownload()
+		}
+	}
 
 	private val permissions = mutableListOf<String>().apply {
 		add(android.Manifest.permission.RECEIVE_SMS)
@@ -59,6 +77,27 @@ class MainActivity : AppCompatActivity() {
 		startForwardingServiceSafely()
 	}
 
+	override fun onStart() {
+		super.onStart()
+		if (!updateReceiverRegistered) {
+			ContextCompat.registerReceiver(
+				this,
+				updateDownloadReceiver,
+				IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE),
+				ContextCompat.RECEIVER_EXPORTED
+			)
+			updateReceiverRegistered = true
+		}
+	}
+
+	override fun onStop() {
+		if (updateReceiverRegistered) {
+			unregisterReceiver(updateDownloadReceiver)
+			updateReceiverRegistered = false
+		}
+		super.onStop()
+	}
+
 	override fun onResume() {
 		super.onResume()
 		if (!batteryOptimizationPromptShown && requestBatteryOptimizationIfRequired()) {
@@ -67,6 +106,110 @@ class MainActivity : AppCompatActivity() {
 		if (!isNotificationServiceEnabled() && !notificationAccessPromptShown) {
 			notificationAccessPromptShown = true
 			showNotificationAccessDialog()
+			return
+		}
+		handlePendingUpdateDownload()
+		checkForAppUpdate()
+	}
+
+	private fun checkForAppUpdate() {
+		if (updateCheckStarted) return
+		updateCheckStarted = true
+		AppUpdateManager.checkForUpdate(this) { result ->
+			if (isFinishing || isDestroyed) return@checkForUpdate
+			if (result is UpdateCheckResult.Available) {
+				showUpdateAvailableDialog(result.release)
+			}
+		}
+	}
+
+	private fun showUpdateAvailableDialog(release: AppRelease) {
+		val pending = AppUpdateManager.pendingDownload(this)
+		if (pending?.versionName == release.versionName) return
+		if (updateDialogVersion == release.versionName) return
+		updateDialogVersion = release.versionName
+		AlertDialog.Builder(this)
+			.setTitle(getString(R.string.update_available_title, release.versionName))
+			.setMessage(R.string.update_available_message)
+			.setPositiveButton(R.string.download_update) { _, _ ->
+				try {
+					AppUpdateManager.enqueueDownload(this, release)
+					getSystemService(NotificationManager::class.java)?.cancel(UPDATE_NOTIFICATION_ID)
+					Toast.makeText(this, R.string.update_download_started, Toast.LENGTH_LONG).show()
+				} catch (_: Exception) {
+					Toast.makeText(this, R.string.update_download_failed, Toast.LENGTH_LONG).show()
+				}
+			}
+			.setNegativeButton(R.string.later, null)
+			.setOnDismissListener { updateDialogVersion = null }
+			.show()
+	}
+
+	private fun handlePendingUpdateDownload() {
+		val pending = AppUpdateManager.pendingDownload(this) ?: return
+		when (AppUpdateManager.downloadState(this, pending)) {
+			UpdateDownloadState.FAILED, UpdateDownloadState.NONE -> {
+				AppUpdateManager.discardPendingDownload(this, pending)
+				Toast.makeText(this, R.string.update_download_failed, Toast.LENGTH_LONG).show()
+			}
+			UpdateDownloadState.SUCCESSFUL -> {
+				when (val validation = AppUpdateManager.validateDownloadedApk(this, pending)) {
+					is ApkValidationResult.Valid -> showInstallUpdateDialog(pending, validation)
+					is ApkValidationResult.Invalid -> {
+						AppUpdateManager.discardPendingDownload(this, pending)
+						if (validation.messageRes != R.string.update_not_newer) {
+							AlertDialog.Builder(this)
+								.setTitle(R.string.update_validation_failed_title)
+								.setMessage(validation.messageRes)
+								.setPositiveButton(R.string.confirm, null)
+								.show()
+						}
+					}
+				}
+			}
+			UpdateDownloadState.RUNNING -> Unit
+		}
+	}
+
+	private fun showInstallUpdateDialog(
+		pending: PendingUpdateDownload,
+		validation: ApkValidationResult.Valid
+	) {
+		if (installPromptVersion == pending.versionName) return
+		installPromptVersion = pending.versionName
+		AlertDialog.Builder(this)
+			.setTitle(getString(R.string.update_ready_title, pending.versionName))
+			.setMessage(R.string.update_ready_message)
+			.setPositiveButton(R.string.install_update) { _, _ ->
+				installPromptVersion = null
+				openUpdateInstaller(validation.file)
+			}
+			.setNegativeButton(R.string.later, null)
+			.setOnDismissListener { installPromptVersion = null }
+			.show()
+	}
+
+	private fun openUpdateInstaller(apkFile: java.io.File) {
+		if (!packageManager.canRequestPackageInstalls()) {
+			Toast.makeText(this, R.string.update_install_permission_required, Toast.LENGTH_LONG).show()
+			openSettingsSafely(
+				Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES).apply {
+					data = Uri.parse("package:$packageName")
+				}
+			)
+			return
+		}
+		try {
+			val apkUri = FileProvider.getUriForFile(this, "$packageName.fileprovider", apkFile)
+			startActivity(
+				Intent(Intent.ACTION_VIEW).apply {
+					setDataAndType(apkUri, "application/vnd.android.package-archive")
+					addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+					addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+				}
+			)
+		} catch (_: Exception) {
+			Toast.makeText(this, R.string.update_installer_failed, Toast.LENGTH_LONG).show()
 		}
 	}
 

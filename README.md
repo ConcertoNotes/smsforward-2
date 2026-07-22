@@ -228,6 +228,20 @@ https://open.feishu.cn/open-apis/bot/v2/hook/xxxxxxxxxxxxxxxxx
 - 在手机厂商的后台管理、自启动或省电设置中允许信捷转发后台运行。
 - 不要手动结束信捷转发的前台服务通知。
 
+## 发布应用更新
+
+从 `1.5.0` 开始，应用启动时会检查 GitHub Releases，后台服务也会每 6 小时检查一次。发现更高版本后，应用会提示下载，并在安装前校验 APK 的包名、版本号和签名证书。
+
+发布的新版本必须同时满足以下条件：
+
+- 使用 `v主版本.次版本.修订版本` 格式的 GitHub Release Tag，例如 `v1.5.1`。
+- Release 必须包含至少一个 `.apk` 资源；GitHub Actions Artifact 不属于 Release，应用无法通过 Releases API 获取。
+- APK 内的 `versionName` 必须与 Release Tag 一致，`versionCode` 必须高于旧版本。
+- APK 必须使用与已安装版本完全相同的签名证书。GitHub Actions 临时生成的 Debug 签名不稳定，不能用于连续发布可覆盖升级的版本。
+- 只发布正式 Release；草稿和 prerelease 不会被 `/releases/latest` 返回。
+
+当前工作流只构建 Debug Artifact。正式发布前应建立受保护的固定签名密钥，并通过 GitHub Actions Secrets 或受控的本地签名流程生成 Release APK。签名密钥及密码不得提交到仓库。
+
 ## 数据与安全
 
 - 应用需要读取短信和通知，这是核心功能所需的高敏感权限。

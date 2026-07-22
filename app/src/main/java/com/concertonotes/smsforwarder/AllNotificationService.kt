@@ -144,6 +144,7 @@ class AllNotificationService : Service() {
 		const val SERVICE_CHANNEL_ID = "ConcertoSMSForwarderServiceChannel"
 		const val RATE_LIMIT_CHANNEL_ID = "ConcertoSMSForwarderRateLimitChannel"
 		const val LISTENER_HEALTH_CHANNEL_ID = "ConcertoSMSForwarderListenerHealthChannel"
+		const val UPDATE_CHANNEL_ID = "ConcertoSMSForwarderUpdateChannel"
 		const val HTTP_TOO_MANY_REQUESTS = 429
 		const val MAX_MESSAGE_AGE_MS = 14L * 24 * 60 * 60 * 1000
 		const val IDLE_POLL_INTERVAL_MS = 1_000L
@@ -162,6 +163,8 @@ class AllNotificationService : Service() {
 	private var lastHealthCheckTime = 0L
 	private var listenerRebindAttempts = 0
 	private var foregroundShowsListenerDisconnected = false
+	private var lastUpdateCheckTime = 0L
+	private var updateCheckInFlight = false
 	private val queueChangedListener: () -> Unit = {
 		handler.post {
 			if (!destroyed) scheduleNext(0)
@@ -179,6 +182,7 @@ class AllNotificationService : Service() {
 		override fun run() {
 			if (destroyed) return
 			checkNotificationServiceHealth()
+			checkForAppUpdate()
 			QueueSingleton.discardPendingOlderThan(System.currentTimeMillis() - MAX_MESSAGE_AGE_MS)
 
 			val now = System.currentTimeMillis()
@@ -573,6 +577,16 @@ class AllNotificationService : Service() {
 				lockscreenVisibility = Notification.VISIBILITY_PUBLIC
 			}
 		)
+		manager.createNotificationChannel(
+			NotificationChannel(
+				UPDATE_CHANNEL_ID,
+				getString(R.string.update_channel_name),
+				NotificationManager.IMPORTANCE_DEFAULT
+			).apply {
+				description = getString(R.string.update_channel_description)
+				lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+			}
+		)
 	}
 
 	private fun createNotification(listenerConnected: Boolean): Notification {
@@ -654,6 +668,49 @@ class AllNotificationService : Service() {
 		showListenerDisconnectedState(
 			alert = shouldAlertListenerDisconnected(enabled, false, listenerRebindAttempts)
 		)
+	}
+
+	private fun checkForAppUpdate() {
+		val now = System.currentTimeMillis()
+		if (updateCheckInFlight || now - lastUpdateCheckTime < UPDATE_CHECK_INTERVAL_MS) return
+		lastUpdateCheckTime = now
+		updateCheckInFlight = true
+		AppUpdateManager.checkForUpdate(this) { result ->
+			updateCheckInFlight = false
+			if (destroyed) return@checkForUpdate
+			when (result) {
+				is UpdateCheckResult.Available -> showUpdateAvailableNotification(result.release)
+				is UpdateCheckResult.Failed -> {
+					// Retry transient GitHub/network failures in one hour instead of six.
+					lastUpdateCheckTime = System.currentTimeMillis() - UPDATE_CHECK_INTERVAL_MS + 60 * 60_000L
+				}
+				UpdateCheckResult.UpToDate -> {
+					getSystemService(NotificationManager::class.java)?.cancel(UPDATE_NOTIFICATION_ID)
+				}
+			}
+		}
+	}
+
+	private fun showUpdateAvailableNotification(release: AppRelease) {
+		val intent = Intent(this, MainActivity::class.java).apply {
+			flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+		}
+		val pendingIntent = PendingIntent.getActivity(
+			this,
+			UPDATE_NOTIFICATION_ID,
+			intent,
+			PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+		)
+		val notification = NotificationCompat.Builder(this, UPDATE_CHANNEL_ID)
+			.setContentTitle(getString(R.string.update_available_title, release.versionName))
+			.setContentText(getString(R.string.update_notification_text))
+			.setSmallIcon(R.drawable.small_icon)
+			.setContentIntent(pendingIntent)
+			.setAutoCancel(true)
+			.setPriority(NotificationCompat.PRIORITY_DEFAULT)
+			.build()
+		getSystemService(NotificationManager::class.java)
+			?.notify(UPDATE_NOTIFICATION_ID, notification)
 	}
 
 	private fun showListenerDisconnectedState(alert: Boolean) {
