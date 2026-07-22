@@ -1,9 +1,13 @@
 package com.concertonotes.smsforwarder
 
 import android.app.Notification
+import android.content.ComponentName
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
+import android.util.Log
+import androidx.core.content.ContextCompat
 import com.concertonotes.smsforwarder.model.APP_PREFERENCES_NAME
 import com.concertonotes.smsforwarder.model.MessageItem
 import com.concertonotes.smsforwarder.model.QueueSingleton
@@ -25,11 +29,32 @@ class NotificationListener : NotificationListenerService() {
 		super.onListenerConnected()
 		QueueSingleton.initialize(this)
 		QueueSingleton.isListenerConnected = true
+		Log.i("ConcertoForwarder", "Notification listener connected")
+		notifyForwardingServiceOfConnectionChange()
 	}
 
 	override fun onListenerDisconnected() {
 		super.onListenerDisconnected()
 		QueueSingleton.isListenerConnected = false
+		Log.w("ConcertoForwarder", "Notification listener disconnected; requesting rebind")
+		try {
+			requestRebind(ComponentName(this, NotificationListener::class.java))
+		} catch (exception: Exception) {
+			Log.e("ConcertoForwarder", "Unable to request notification listener rebind", exception)
+		}
+		notifyForwardingServiceOfConnectionChange()
+	}
+
+	private fun notifyForwardingServiceOfConnectionChange() {
+		try {
+			ContextCompat.startForegroundService(
+				this,
+				Intent(this, AllNotificationService::class.java)
+					.setAction(ACTION_LISTENER_CONNECTION_CHANGED)
+			)
+		} catch (exception: Exception) {
+			Log.e("ConcertoForwarder", "Unable to refresh listener connection state", exception)
+		}
 	}
 
 	override fun onNotificationPosted(sbn: StatusBarNotification) {

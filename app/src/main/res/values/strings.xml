@@ -36,9 +36,14 @@
     <string name="service_channel_name">短信转发服务</string>
     <string name="service_channel_description">信捷转发后台运行状态</string>
     <string name="rate_limit_channel_name">转发频率限制提醒</string>
+    <string name="listener_health_channel_name">通知监听状态提醒</string>
+    <string name="listener_health_channel_description">通知监听断开及恢复提醒</string>
     <string name="rate_limit_channel_description">消息平台接口频率限制提醒</string>
     <string name="service_notification_title">正在监听短信和通知</string>
     <string name="service_notification_text">信捷转发正在运行</string>
+    <string name="listener_disconnected_title">通知监听已断开</string>
+    <string name="listener_disconnected_text">正在尝试重新连接通知监听</string>
+    <string name="listener_disconnected_action">点击重新开启通知使用权，避免漏掉新消息</string>
     <string name="rate_limit_title">消息发送频率受限</string>
     <string name="rate_limit_text">发送已暂停，预计约 %1$d 分钟后重试。</string>
     <string name="message_origin">来源：\n%1$s</string>

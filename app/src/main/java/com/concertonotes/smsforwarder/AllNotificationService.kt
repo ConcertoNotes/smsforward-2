@@ -10,6 +10,7 @@ import android.content.Intent
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.provider.Settings
 import android.service.notification.NotificationListenerService
 import android.util.Log
 import androidx.core.app.NotificationCompat
@@ -36,6 +37,17 @@ import kotlin.math.min
 internal const val TELEGRAM_CONTENT_CHUNK_SIZE = 3_500
 internal const val FEISHU_CONTENT_CHUNK_SIZE = 3_500
 internal const val MAX_RETRY_DELAY_MS = 15 * 60_000L
+internal const val LISTENER_HEALTH_CHECK_INTERVAL_MS = 60_000L
+internal const val LISTENER_REBIND_ATTEMPTS_BEFORE_ALERT = 2
+internal const val ACTION_LISTENER_CONNECTION_CHANGED =
+	"com.concertonotes.smsforwarder.LISTENER_CONNECTION_CHANGED"
+
+internal fun shouldAlertListenerDisconnected(
+	listenerEnabled: Boolean,
+	listenerConnected: Boolean,
+	rebindAttempts: Int
+): Boolean = listenerEnabled && !listenerConnected &&
+	rebindAttempts >= LISTENER_REBIND_ATTEMPTS_BEFORE_ALERT
 
 internal fun createFeishuSignature(timestampSeconds: Long, secret: String): String {
 	val signingKey = "$timestampSeconds\n$secret".toByteArray(StandardCharsets.UTF_8)
@@ -128,8 +140,10 @@ class AllNotificationService : Service() {
 	private companion object {
 		const val SERVICE_NOTIFICATION_ID = 1
 		const val RATE_LIMIT_NOTIFICATION_ID = 2
+		const val LISTENER_DISCONNECTED_NOTIFICATION_ID = 3
 		const val SERVICE_CHANNEL_ID = "ConcertoSMSForwarderServiceChannel"
 		const val RATE_LIMIT_CHANNEL_ID = "ConcertoSMSForwarderRateLimitChannel"
+		const val LISTENER_HEALTH_CHANNEL_ID = "ConcertoSMSForwarderListenerHealthChannel"
 		const val HTTP_TOO_MANY_REQUESTS = 429
 		const val MAX_MESSAGE_AGE_MS = 14L * 24 * 60 * 60 * 1000
 		const val IDLE_POLL_INTERVAL_MS = 1_000L
@@ -145,7 +159,9 @@ class AllNotificationService : Service() {
 	private var destroyed = false
 	@Volatile
 	private var startupFailed = false
-	private var lastHealthCheckTime = System.currentTimeMillis()
+	private var lastHealthCheckTime = 0L
+	private var listenerRebindAttempts = 0
+	private var foregroundShowsListenerDisconnected = false
 	private val queueChangedListener: () -> Unit = {
 		handler.post {
 			if (!destroyed) scheduleNext(0)
@@ -217,7 +233,10 @@ class AllNotificationService : Service() {
 		try {
 			QueueSingleton.setQueueChangedListener(queueChangedListener)
 			createNotificationChannels()
-			startForeground(SERVICE_NOTIFICATION_ID, createNotification())
+			startForeground(
+				SERVICE_NOTIFICATION_ID,
+				createNotification(listenerConnected = QueueSingleton.isListenerConnected)
+			)
 			QueueSingleton.initialize(this)
 			handler.post(processRunnable)
 		} catch (exception: Exception) {
@@ -230,7 +249,20 @@ class AllNotificationService : Service() {
 	override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
 		if (startupFailed) return START_NOT_STICKY
 		return try {
-			startForeground(SERVICE_NOTIFICATION_ID, createNotification())
+			val listenerConnected = QueueSingleton.isListenerConnected
+			foregroundShowsListenerDisconnected = !listenerConnected
+			startForeground(
+				SERVICE_NOTIFICATION_ID,
+				createNotification(listenerConnected = listenerConnected)
+			)
+			if (listenerConnected) {
+				getSystemService(NotificationManager::class.java)
+					?.cancel(LISTENER_DISCONNECTED_NOTIFICATION_ID)
+			}
+			if (intent?.action == ACTION_LISTENER_CONNECTION_CHANGED) {
+				lastHealthCheckTime = 0L
+				scheduleNext(0)
+			}
 			START_STICKY
 		} catch (exception: Exception) {
 			startupFailed = true
@@ -531,9 +563,19 @@ class AllNotificationService : Service() {
 				lockscreenVisibility = Notification.VISIBILITY_PUBLIC
 			}
 		)
+		manager.createNotificationChannel(
+			NotificationChannel(
+				LISTENER_HEALTH_CHANNEL_ID,
+				getString(R.string.listener_health_channel_name),
+				NotificationManager.IMPORTANCE_HIGH
+			).apply {
+				description = getString(R.string.listener_health_channel_description)
+				lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+			}
+		)
 	}
 
-	private fun createNotification(): Notification {
+	private fun createNotification(listenerConnected: Boolean): Notification {
 		val intent = Intent(this, MainActivity::class.java).apply {
 			flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
 		}
@@ -544,8 +586,18 @@ class AllNotificationService : Service() {
 			PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
 		)
 		return NotificationCompat.Builder(this, SERVICE_CHANNEL_ID)
-			.setContentTitle(getString(R.string.service_notification_title))
-			.setContentText(getString(R.string.service_notification_text))
+			.setContentTitle(
+				getString(
+					if (listenerConnected) R.string.service_notification_title
+					else R.string.listener_disconnected_title
+				)
+			)
+			.setContentText(
+				getString(
+					if (listenerConnected) R.string.service_notification_text
+					else R.string.listener_disconnected_text
+				)
+			)
 			.setSmallIcon(R.drawable.small_icon)
 			.setContentIntent(pendingIntent)
 			.setOngoing(true)
@@ -568,17 +620,75 @@ class AllNotificationService : Service() {
 
 	private fun checkNotificationServiceHealth() {
 		val now = System.currentTimeMillis()
-		if (now - lastHealthCheckTime < 60_000L) return
+		if (now - lastHealthCheckTime < LISTENER_HEALTH_CHECK_INTERVAL_MS) return
 		lastHealthCheckTime = now
 
 		val componentName = ComponentName(this, NotificationListener::class.java)
-		val enabledListeners = android.provider.Settings.Secure.getString(contentResolver, "enabled_notification_listeners")
+		val enabledListeners = Settings.Secure.getString(contentResolver, "enabled_notification_listeners")
 		val enabled = enabledListeners
 			?.split(':')
 			?.any { it == componentName.flattenToString() }
 			?: false
-		if (enabled && !QueueSingleton.isListenerConnected) {
+		if (!enabled) {
+			listenerRebindAttempts = 0
+			showListenerDisconnectedState(alert = true)
+			return
+		}
+
+		if (QueueSingleton.isListenerConnected) {
+			listenerRebindAttempts = 0
+			clearListenerDisconnectedState()
+			return
+		}
+
+		listenerRebindAttempts += 1
+		Log.w(
+			"ConcertoForwarder",
+			"Notification listener is not connected; rebind attempt $listenerRebindAttempts"
+		)
+		try {
 			NotificationListenerService.requestRebind(componentName)
+		} catch (exception: Exception) {
+			Log.e("ConcertoForwarder", "Unable to request notification listener rebind", exception)
+		}
+		showListenerDisconnectedState(
+			alert = shouldAlertListenerDisconnected(enabled, false, listenerRebindAttempts)
+		)
+	}
+
+	private fun showListenerDisconnectedState(alert: Boolean) {
+		val manager = getSystemService(NotificationManager::class.java) ?: return
+		if (!foregroundShowsListenerDisconnected) {
+			foregroundShowsListenerDisconnected = true
+			manager.notify(SERVICE_NOTIFICATION_ID, createNotification(listenerConnected = false))
+		}
+		if (!alert) return
+
+		val settingsIntent = Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
+		val pendingIntent = PendingIntent.getActivity(
+			this,
+			LISTENER_DISCONNECTED_NOTIFICATION_ID,
+			settingsIntent,
+			PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+		)
+		val notification = NotificationCompat.Builder(this, LISTENER_HEALTH_CHANNEL_ID)
+			.setContentTitle(getString(R.string.listener_disconnected_title))
+			.setContentText(getString(R.string.listener_disconnected_action))
+			.setSmallIcon(R.drawable.small_icon)
+			.setContentIntent(pendingIntent)
+			.setAutoCancel(true)
+			.setPriority(NotificationCompat.PRIORITY_HIGH)
+			.setCategory(NotificationCompat.CATEGORY_ERROR)
+			.build()
+		manager.notify(LISTENER_DISCONNECTED_NOTIFICATION_ID, notification)
+	}
+
+	private fun clearListenerDisconnectedState() {
+		if (!foregroundShowsListenerDisconnected) return
+		foregroundShowsListenerDisconnected = false
+		getSystemService(NotificationManager::class.java)?.apply {
+			notify(SERVICE_NOTIFICATION_ID, createNotification(listenerConnected = true))
+			cancel(LISTENER_DISCONNECTED_NOTIFICATION_ID)
 		}
 	}
 }
