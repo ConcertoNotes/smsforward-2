@@ -1,12 +1,16 @@
 package com.concertonotes.smsforwarder
 
+import android.annotation.SuppressLint
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.BroadcastReceiver
 import android.content.ComponentName
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
@@ -14,6 +18,7 @@ import android.provider.Settings
 import android.service.notification.NotificationListenerService
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import com.concertonotes.smsforwarder.model.APP_PREFERENCES_NAME
 import com.concertonotes.smsforwarder.model.MessageItem
 import com.concertonotes.smsforwarder.model.QueueSingleton
@@ -41,6 +46,8 @@ internal const val LISTENER_HEALTH_CHECK_INTERVAL_MS = 60_000L
 internal const val LISTENER_REBIND_ATTEMPTS_BEFORE_ALERT = 2
 internal const val ACTION_LISTENER_CONNECTION_CHANGED =
 	"com.concertonotes.smsforwarder.LISTENER_CONNECTION_CHANGED"
+internal const val ACTION_PROCESS_PENDING_MESSAGES =
+	"com.concertonotes.smsforwarder.PROCESS_PENDING_MESSAGES"
 
 internal fun shouldAlertListenerDisconnected(
 	listenerEnabled: Boolean,
@@ -136,6 +143,7 @@ internal fun parseRetryAfterMillis(responseBody: String): Long {
 	}
 }
 
+@SuppressLint("LogConditional")
 class AllNotificationService : Service() {
 	private companion object {
 		const val SERVICE_NOTIFICATION_ID = 1
@@ -165,6 +173,14 @@ class AllNotificationService : Service() {
 	private var foregroundShowsListenerDisconnected = false
 	private var lastUpdateCheckTime = 0L
 	private var updateCheckInFlight = false
+	private val screenOnReceiver = object : BroadcastReceiver() {
+		override fun onReceive(context: Context, intent: Intent) {
+			if (intent.action != Intent.ACTION_SCREEN_ON) return
+			requestNotificationListenerRebind()
+			lastHealthCheckTime = 0L
+			scheduleNext(0)
+		}
+	}
 	private val queueChangedListener: () -> Unit = {
 		handler.post {
 			if (!destroyed) scheduleNext(0)
@@ -212,6 +228,10 @@ class AllNotificationService : Service() {
 	}
 
 	private fun sendMessageInBackground(message: MessageItem) {
+		Log.i(
+			"ConcertoForwarder",
+			"Forwarding attempt started for ${message.packageName}; retry=${message.retryCount}"
+		)
 		val result = try {
 			sendMessage(message)
 		} catch (exception: Exception) {
@@ -242,6 +262,13 @@ class AllNotificationService : Service() {
 				createNotification(listenerConnected = QueueSingleton.isListenerConnected)
 			)
 			QueueSingleton.initialize(this)
+			ContextCompat.registerReceiver(
+				this,
+				screenOnReceiver,
+				IntentFilter(Intent.ACTION_SCREEN_ON),
+				ContextCompat.RECEIVER_NOT_EXPORTED
+			)
+			Log.i("ConcertoForwarder", "Forwarding service created")
 			handler.post(processRunnable)
 		} catch (exception: Exception) {
 			startupFailed = true
@@ -267,6 +294,13 @@ class AllNotificationService : Service() {
 				lastHealthCheckTime = 0L
 				scheduleNext(0)
 			}
+			if (intent?.action == ACTION_PROCESS_PENDING_MESSAGES) {
+				Log.i(
+					"ConcertoForwarder",
+					"Forwarding service woken by notification; pending=${QueueSingleton.messageQueue.size}"
+				)
+				scheduleNext(0)
+			}
 			START_STICKY
 		} catch (exception: Exception) {
 			startupFailed = true
@@ -282,6 +316,11 @@ class AllNotificationService : Service() {
 		handler.removeCallbacks(processRunnable)
 		executorService.shutdownNow()
 		channelExecutor.shutdownNow()
+		try {
+			unregisterReceiver(screenOnReceiver)
+		} catch (_: Exception) {
+			// Startup may have failed before the receiver was registered.
+		}
 		QueueSingleton.releaseWakeLock()
 		super.onDestroy()
 	}
@@ -291,6 +330,7 @@ class AllNotificationService : Service() {
 	private fun handleSendResult(message: MessageItem, result: SendResult) {
 		when (result) {
 			SendResult.Success -> {
+				Log.i("ConcertoForwarder", "Forwarding succeeded for ${message.packageName}")
 				message.isSent = true
 				message.isError = false
 				message.retryCount = 0
@@ -300,6 +340,11 @@ class AllNotificationService : Service() {
 				QueueSingleton.completePending(message)
 			}
 			is SendResult.Retry -> {
+				Log.w(
+					"ConcertoForwarder",
+					"Forwarding deferred for ${message.packageName}; " +
+						"code=${result.responseCode}, delay=${result.delayMs}ms"
+				)
 				// A retry is still pending work, not a final forwarding failure.
 				message.isError = false
 				message.retryCount += 1
@@ -660,14 +705,20 @@ class AllNotificationService : Service() {
 			"ConcertoForwarder",
 			"Notification listener is not connected; rebind attempt $listenerRebindAttempts"
 		)
-		try {
-			NotificationListenerService.requestRebind(componentName)
-		} catch (exception: Exception) {
-			Log.e("ConcertoForwarder", "Unable to request notification listener rebind", exception)
-		}
+		requestNotificationListenerRebind()
 		showListenerDisconnectedState(
 			alert = shouldAlertListenerDisconnected(enabled, false, listenerRebindAttempts)
 		)
+	}
+
+	private fun requestNotificationListenerRebind() {
+		try {
+			NotificationListenerService.requestRebind(
+				ComponentName(this, NotificationListener::class.java)
+			)
+		} catch (exception: Exception) {
+			Log.e("ConcertoForwarder", "Unable to request notification listener rebind", exception)
+		}
 	}
 
 	private fun checkForAppUpdate() {
